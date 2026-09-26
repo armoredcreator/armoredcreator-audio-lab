@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import unittest
 
-from ArmoredVision.modules.v1.caption.generator import CaptionGenerator
+import requests
+
+from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError, CaptionGenerator
 from ArmoredVision.modules.v1.caption.policy import CaptionPolicyError, validate_caption
 
 
@@ -14,6 +16,8 @@ class CaptionPolicyTests(unittest.TestCase):
         os.environ.pop("ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK", None)
         os.environ.pop("ARMORED_CAPTION_API_TIMEOUT", None)
         os.environ.pop("ARMORED_CAPTION_MODEL", None)
+        os.environ.pop("ARMORED_CAPTION_MAX_ATTEMPTS", None)
+        os.environ.pop("ARMORED_CAPTION_RETRY_DELAY", None)
 
     def test_accepts_required_shape(self):
         result = validate_caption(
@@ -162,6 +166,69 @@ class CaptionPolicyTests(unittest.TestCase):
             validate_caption(caption, product_name="Kit de cuidados de beleza"),
             caption,
         )
+
+
+    def test_generator_retries_until_gemini_returns_valid_caption(self):
+        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
+        os.environ["GEMINI_API_KEY"] = "configured"
+        os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "0"
+        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "3"
+        os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"
+
+        calls = {"count": 0}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "text": "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao"
+                            }]
+                        }
+                    }]
+                }
+
+        def requester(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise requests.exceptions.ReadTimeout("temporary timeout")
+            return Response()
+
+        caption = CaptionGenerator(requester=requester).generate({
+            "productName": "Bancada Suspensa",
+            "category_name": "barbearia",
+        })
+
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(
+            caption,
+            "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao",
+        )
+
+    def test_generator_does_not_fallback_when_gemini_exhausts_retries(self):
+        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
+        os.environ["GEMINI_API_KEY"] = "configured"
+        os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "0"
+        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "2"
+        os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"
+
+        calls = {"count": 0}
+
+        def requester(*args, **kwargs):
+            calls["count"] += 1
+            raise requests.exceptions.ReadTimeout("unavailable")
+
+        with self.assertRaises(CaptionGenerationError):
+            CaptionGenerator(requester=requester).generate({
+                "productName": "Bancada Suspensa",
+                "category_name": "barbearia",
+            })
+
+        self.assertEqual(calls["count"], 2)
 
 
 if __name__ == "__main__":
