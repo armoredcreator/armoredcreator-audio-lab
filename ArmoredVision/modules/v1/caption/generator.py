@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from typing import Any, Callable
 
 import requests
@@ -162,32 +163,48 @@ REGRAS:
             except requests.RequestException:
                 pass
 
-        try:
-            response = self.requester(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": parts}],
-                    "generationConfig": {"maxOutputTokens": 80},
-                },
-                timeout=int(os.getenv("ARMORED_CAPTION_API_TIMEOUT", "90")),
-            )
-            response.raise_for_status()
-            data = response.json()
-            try:
-                generated = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            except (KeyError, IndexError, TypeError) as exc:
-                raise CaptionGenerationError("Gemini não retornou texto de legenda") from exc
+        attempts = max(1, int(os.getenv("ARMORED_CAPTION_MAX_ATTEMPTS", "5")))
+        retry_delay = max(0.0, float(os.getenv("ARMORED_CAPTION_RETRY_DELAY", "2")))
+        last_error = None
 
+        for attempt in range(1, attempts + 1):
             try:
-                return validate_caption(
-                    generated,
-                    product_name=str(product.get("productName") or ""),
-                    product_context=product,
+                response = self.requester(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": parts}],
+                        "generationConfig": {"maxOutputTokens": 80},
+                    },
+                    timeout=int(os.getenv("ARMORED_CAPTION_API_TIMEOUT", "90")),
                 )
-            except CaptionPolicyError as exc:
-                raise CaptionGenerationError(
-                    f"Gemini gerou legenda fora da política: {exc}"
-                ) from exc
-        except (requests.RequestException, CaptionGenerationError):
+                response.raise_for_status()
+                data = response.json()
+                try:
+                    generated = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise CaptionGenerationError("Gemini não retornou texto de legenda") from exc
+
+                try:
+                    return validate_caption(
+                        generated,
+                        product_name=str(product.get("productName") or ""),
+                        product_context=product,
+                    )
+                except CaptionPolicyError as exc:
+                    raise CaptionGenerationError(
+                        f"Gemini gerou legenda fora da política: {exc}"
+                    ) from exc
+
+            except (requests.RequestException, CaptionGenerationError) as exc:
+                last_error = exc
+                if attempt < attempts:
+                    time.sleep(retry_delay)
+
+        if os.getenv("ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK", "1") == "1":
             return self._fallback(product)
+
+        raise CaptionGenerationError(
+            f"Gemini não conseguiu gerar uma legenda válida após "
+            f"{attempts} tentativa(s): {last_error}"
+        ) from last_error
