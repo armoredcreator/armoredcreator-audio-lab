@@ -37,6 +37,12 @@ def _meaningful_product_tokens(product_name: str) -> set[str]:
 
 
 def _meaningful_product_token_sequences(product_name: str) -> set[str]:
+    """Return bounded contiguous token phrases used by hashtags.
+ 
+    Single-token leaks are already rejected separately. This check only needs
+    short contiguous phrases to catch hashtag recombinations such as
+    ``batommatte`` without generating exponential token subsets.
+    """
     stop = {
         "a", "as", "ao", "aos", "com", "da", "das", "de", "do", "dos", "e",
         "em", "para", "por", "sem", "um", "uma", "kit", "conjunto",
@@ -47,16 +53,11 @@ def _meaningful_product_token_sequences(product_name: str) -> set[str]:
         if token not in stop and len(token) >= 4
     ]
     sequences: set[str] = set()
-    for size in range(2, len(tokens) + 1):
-        def add_subsequences(start: int, chosen: list[str]) -> None:
-            if len(chosen) == size:
-                sequences.add("".join(chosen))
-                return
-            for index in range(start, len(tokens)):
-                add_subsequences(index + 1, chosen + [tokens[index]])
-        add_subsequences(0, [])
+    max_size = min(3, len(tokens))
+    for size in range(2, max_size + 1):
+        for index in range(0, len(tokens) - size + 1):
+            sequences.add("".join(tokens[index:index + size]))
     return sequences
-
 
 def _context_leak_tokens(product_context: dict[str, Any] | None) -> set[str]:
     if not product_context:
