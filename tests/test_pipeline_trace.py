@@ -31,7 +31,7 @@ class PipelineTraceTests(unittest.TestCase):
             root = Path(td)
             storage = Storage(root)
             db = Database(storage.database / "armoredcreator.db")
-            original = storage.video_workspace("trace-1") / "trace-1_finallinkoriginal.mp4"
+            original = storage.workspace("trace-1") / "trace-1_finallinkoriginal.mp4"
             original.parent.mkdir(parents=True, exist_ok=True)
             original.write_bytes(b"trace")
 
@@ -48,9 +48,10 @@ class PipelineTraceTests(unittest.TestCase):
                 TraceStudio(),
                 TracePublisher(),
             )
-            pipeline.run(item_id)
+            try:
+                pipeline.run(item_id)
 
-            row = db.get(item_id)
+                row = db.get(item_id)
             self.assertEqual(row.state, State.WAITING_VISION)
 
             trace_path = root / "storage" / "logs" / "pipeline_trace.jsonl"
@@ -69,7 +70,9 @@ class PipelineTraceTests(unittest.TestCase):
                 event for event in events
                 if event["stage"] == "VISION" and event["event"] == "WAITING"
             )
-            self.assertEqual(waiting["reason"], "simulated-vision-unresolved")
+                self.assertEqual(waiting["reason"], "simulated-vision-unresolved")
+            finally:
+                db.close()
 
 
 if __name__ == "__main__":
