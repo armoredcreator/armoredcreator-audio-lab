@@ -52,27 +52,39 @@ class PipelineTraceTests(unittest.TestCase):
                 pipeline.run(item_id)
 
                 row = db.get(item_id)
-            self.assertEqual(row.state, State.WAITING_VISION)
+                self.assertEqual(row.state, State.WAITING_VISION)
 
-            trace_path = root / "storage" / "logs" / "pipeline_trace.jsonl"
-            self.assertTrue(trace_path.exists())
+                trace_path = root / "storage" / "logs" / "pipeline_trace.jsonl"
+                self.assertTrue(trace_path.exists())
 
-            events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-            self.assertTrue(events)
-            self.assertEqual(events[0]["item_id"], item_id)
-            self.assertEqual(events[0]["event"], "START")
+                events = [
+                    json.loads(line)
+                    for line in trace_path.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertTrue(events)
+                self.assertEqual(events[0]["item_id"], item_id)
+                self.assertEqual(events[0]["event"], "START")
 
-            vision_events = [event["event"] for event in events if event["stage"] == "VISION"]
-            self.assertIn("START", vision_events)
-            self.assertIn("WAITING", vision_events)
+                vision_events = [
+                    event["event"]
+                    for event in events
+                    if event["stage"] == "VISION"
+                ]
+                self.assertIn("START", vision_events)
+                self.assertIn("WAITING", vision_events)
 
-            waiting = next(
-                event for event in events
-                if event["stage"] == "VISION" and event["event"] == "WAITING"
-            )
-                self.assertEqual(waiting["reason"], "simulated-vision-unresolved")
+                waiting = next(
+                    event
+                    for event in events
+                    if event["stage"] == "VISION" and event["event"] == "WAITING"
+                )
+                self.assertEqual(
+                    waiting["reason"],
+                    "simulated-vision-unresolved",
+                )
             finally:
                 db.close()
+
 
 
 if __name__ == "__main__":
