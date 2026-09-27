@@ -48,6 +48,17 @@ class CaptionPolicyTests(unittest.TestCase):
                 with self.assertRaises(CaptionPolicyError):
                     validate_caption(caption, product_name=product_name)
 
+    def test_product_phrase_guard_is_bounded(self):
+        from ArmoredVision.modules.v1.caption.policy import _meaningful_product_token_sequences
+
+        product_name = " ".join(f"produto{i}" for i in range(30))
+        phrases = _meaningful_product_token_sequences(product_name)
+
+        self.assertLessEqual(len(phrases), 87)
+        self.assertIn("produto0produto1", phrases)
+        self.assertIn("produto0produto1produto2", phrases)
+        self.assertNotIn("produto0produto2", phrases)
+
     def test_generator_does_not_fallback_when_gemini_times_out(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
         os.environ["GEMINI_API_KEY"] = "configured-but-unavailable"
