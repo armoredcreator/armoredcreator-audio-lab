@@ -53,6 +53,9 @@ class PipelineTraceTests(unittest.TestCase):
 
                 row = db.get(item_id)
                 self.assertEqual(row.state, State.WAITING_VISION)
+                pipeline.run(item_id)
+                blocked_row = db.get(item_id)
+                self.assertEqual(blocked_row.state, State.WAITING_VISION)
 
                 trace_path = root / "storage" / "logs" / "pipeline_trace.jsonl"
                 self.assertTrue(trace_path.exists())
@@ -78,10 +81,16 @@ class PipelineTraceTests(unittest.TestCase):
                     for event in events
                     if event["stage"] == "VISION" and event["event"] == "WAITING"
                 )
-                self.assertEqual(
-                    waiting["reason"],
-                    "simulated-vision-unresolved",
+                waiting_events = [
+                    event for event in events
+                    if event["stage"] == "VISION" and event["event"] == "WAITING"
+                ]
+                self.assertEqual(waiting_events[-1]["reason"], "simulated-vision-unresolved")
+                blocked = next(
+                    event for event in events
+                    if event["stage"] == "VISION" and event["event"] == "BLOCKED"
                 )
+                self.assertEqual(blocked["reason"], "simulated-vision-unresolved")
             finally:
                 db.close()
 
