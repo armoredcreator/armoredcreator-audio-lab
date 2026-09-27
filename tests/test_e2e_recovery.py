@@ -66,7 +66,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
                 coordinator=Coordinator.build(root, Bindings(Source(source),Vision(),CrashStudio(ArmoredStudio(root)),publisher))
                 item_id=coordinator.ingest_once()
                 with self.assertRaises(RuntimeError): coordinator.run(item_id)
-                self.assertEqual(coordinator.db.get(item_id).state,State.FAILED)
+                self.assertEqual(coordinator.db.get(item_id).state,State.RECOVERY)
                 coordinator.close()
                 coordinator=Coordinator.build(root, Bindings(Source(source),Vision(),ArmoredStudio(root),publisher))
                 coordinator.recover(item_id)
@@ -77,7 +77,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
                 self.assertEqual([p.name for p in row.workspace.iterdir()],[row.original_path.name])
                 events=[r["new_state"] for r in coordinator.db.conn.execute("SELECT new_state FROM state_events WHERE content_id=? ORDER BY id",(item_id,)).fetchall()]
                 self.assertIn(State.VISION.value,events); self.assertIn(State.STUDIO.value,events)
-                self.assertIn(State.PUBLISHING.value,events); self.assertIn(State.FAILED.value,events)
+                self.assertIn(State.PUBLISHING.value,events); self.assertIn(State.RECOVERY.value,events)
                 coordinator.close()
         finally:
             os.environ.pop("ARMORED_STUDIO_ALLOW_COPY",None); os.environ.pop("ARMORED_STUDIO_FORCE_COPY",None)
