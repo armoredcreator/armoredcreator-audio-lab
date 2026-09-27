@@ -647,17 +647,14 @@ class Coordinator:
         for row in rows:
             item_id = str(row["content_id"])
 
-            # FAILED is terminal when Vision never produced a product identity.
-            # Only failures that already have a durable affiliate identity (or
-            # an existing publication record) are safe to reopen automatically.
-            # This preserves the explicit/manual-retry contract for functional
-            # failures such as "produto não encontrado", while still recovering
-            # failures that happened after Vision had already succeeded.
+            # FAILED is a legacy terminal state from the previous
+            # generic-exception path. Current processing failures are persisted
+            # as RECOVERY; legacy FAILED rows must therefore be reopened once
+            # through the same deterministic recovery path instead of being
+            # silently abandoned. Recovery itself decides the correct resume
+            # stage from durable state/artifacts.
             if str(row["state"]) == State.FAILED.value:
-                item = self.db.get(item_id)
-                if not item.affiliate_name and self.db.publication(item_id) is None:
-                    continue
-
+                self.db.transition(item_id, State.RECOVERY, "legacy-failed-recovery")
             # RECEIVED without an immutable original is a durable Telegram
             # reservation whose download was interrupted. The Sync source must
             # rediscover/materialize it; Recovery cannot invent the missing
