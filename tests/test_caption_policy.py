@@ -39,14 +39,25 @@ class CaptionPolicyTests(unittest.TestCase):
                 with self.assertRaises(CaptionPolicyError):
                     validate_caption(caption, product_name="Organizador de cozinha")
 
-        product_leaks = (
-            ("Batom lindo ✨\n#beleza", "Batom Matte Vermelho"),
-            ("Olha isso ✨\n#batommatte", "Batom Matte Vermelho"),
+        self.assertEqual(
+            validate_caption(
+                "Batom lindo ✨\n#beleza",
+                product_name="Batom Matte Vermelho",
+            ),
+            "Batom lindo ✨\n#beleza",
         )
-        for caption, product_name in product_leaks:
-            with self.subTest(caption=caption):
-                with self.assertRaises(CaptionPolicyError):
-                    validate_caption(caption, product_name=product_name)
+
+        with self.assertRaises(CaptionPolicyError):
+            validate_caption(
+                "Olha isso ✨\n#batommatte",
+                product_name="Batom Matte Vermelho",
+            )
+
+        with self.assertRaises(CaptionPolicyError):
+            validate_caption(
+                "Batom matte ✨\n#beleza",
+                product_name="Batom Matte Vermelho",
+            )
 
     def test_product_phrase_guard_is_bounded(self):
         from ArmoredVision.modules.v1.caption.policy import _meaningful_product_token_sequences
@@ -135,7 +146,7 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertNotIn("affiliate.invalid", prompt_text)
         self.assertNotIn("shopee.invalid", prompt_text)
         self.assertIn("combinar diretamente com o produto específico", prompt_text)
-        self.assertIn("NUNCA copie o nome do produto", prompt_text)
+        self.assertIn("Não copie o título completo", prompt_text)
         self.assertIn("As hashtags devem ser específicas", prompt_text)
         self.assertEqual(captured["timeout"], 90)
     def test_generator_does_not_fallback_when_gemini_returns_invalid_caption(self):
