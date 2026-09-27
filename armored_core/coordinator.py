@@ -690,13 +690,17 @@ class Coordinator:
                     # CATCH-UP is blocked: its checkpoint must remain authoritative.
                     break
             except Exception as exc:
-                # A single unrecoverable item must not terminate the Coordinator.
-                # Pipeline failures are persisted in SQLite; startup continues
-                # with the remaining pending items and LIVE discovery.
                 import logging
+                current = self.db.get(item_id)
                 logging.getLogger(__name__).exception(
-                    "Recovery falhou para item %s; Coordinator continuará: %s",
+                    "Recovery falhou para item %s; state=%s: %s",
                     item_id,
+                    current.state.value,
                     exc,
                 )
+                if current.state in (State.WAITING_VISION, State.RECOVERY):
+                    # The current candidate still owns the checkpoint. Never
+                    # continue startup recovery with a later item while this
+                    # candidate remains unresolved.
+                    break
         return recovered
