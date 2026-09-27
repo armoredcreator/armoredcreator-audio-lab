@@ -48,25 +48,7 @@ class CaptionPolicyTests(unittest.TestCase):
                 with self.assertRaises(CaptionPolicyError):
                     validate_caption(caption, product_name=product_name)
 
-    def test_generator_falls_back_when_gemini_times_out(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        os.environ["GEMINI_API_KEY"] = "configured-but-unavailable"
-        os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "1"
-
-        def requester(*args, **kwargs):
-            raise __import__("requests").exceptions.ReadTimeout("timeout")
-
-        caption = CaptionGenerator(requester=requester).generate({
-            "productName": "Batom Matte Vermelho",
-            "category_name": "beleza",
-        })
-
-        self.assertEqual(
-            validate_caption(caption, product_name="Batom Matte Vermelho"),
-            caption,
-        )
-
-    def test_rejects_brand_model_and_description_leaks(self):
+    def test_generator_does_not_fallback_when_gemini_times_out\n        os.environ["ARMORED_CAPTION_ENABLED"] = "1"\n        os.environ["GEMINI_API_KEY"] = "configured-but-unavailable"\n        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "2"\n        os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"\n\n        def requester(*args, **kwargs):\n            raise requests.exceptions.ReadTimeout("timeout")\n\n        with self.assertRaises(CaptionGenerationError):\n            CaptionGenerator(requester=requester).generate({\n                "productName": "Batom Matte Vermelho",\n                "category_name": "beleza",\n            })\n\n    def test_rejects_brand_model_and_description_leaks(self):
         context = {
             "brand": "Tramontina",
             "model": "Pro 900",
@@ -130,45 +112,7 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertIn("NUNCA copie o nome do produto", prompt_text)
         self.assertIn("hashtags também DEVEM ser específicas", prompt_text)
         self.assertEqual(captured["timeout"], 90)
-    def test_generator_falls_back_when_gemini_returns_invalid_caption(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        os.environ["GEMINI_API_KEY"] = "configured-but-invalid-response"
-        os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "1"
-
-        class Response:
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"candidates": [{"content": {"parts": [{"text": "Compre agora 🔥\n#oferta #promo #extra"}]}}]}
-
-        caption = CaptionGenerator(requester=lambda *args, **kwargs: Response()).generate({
-            "productName": "Batom Matte Vermelho",
-            "category_name": "beleza",
-        })
-
-        self.assertEqual(
-            validate_caption(caption, product_name="Batom Matte Vermelho"),
-            caption,
-        )
-
-    def test_generator_has_safe_deterministic_fallback(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        os.environ.pop("GEMINI_API_KEY", None)
-        os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "1"
-
-        caption = CaptionGenerator().generate({
-            "productName": "Kit de cuidados de beleza",
-            "category_name": "beleza",
-        })
-
-        self.assertEqual(
-            validate_caption(caption, product_name="Kit de cuidados de beleza"),
-            caption,
-        )
-
-
-    def test_generator_retries_until_gemini_returns_valid_caption(self):
+    def test_generator_does_not_fallback_when_gemini_returns_invalid_caption\n        os.environ["ARMORED_CAPTION_ENABLED"] = "1"\n        os.environ["GEMINI_API_KEY"] = "configured-but-invalid-response"\n        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "2"\n        os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"\n\n        class Response:\n            def raise_for_status(self):\n                return None\n\n            def json(self):\n                return {"candidates": [{"content": {"parts": [{"text": "Compre agora 🔥\\n#oferta #promo"}]}}]}\n\n        with self.assertRaises(CaptionGenerationError):\n            CaptionGenerator(requester=lambda *args, **kwargs: Response()).generate({\n                "productName": "Batom Matte Vermelho",\n                "category_name": "beleza",\n            })\n\n    def test_generator_retries_until_gemini_returns_valid_caption(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
         os.environ["GEMINI_API_KEY"] = "configured"
         os.environ["ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK"] = "0"
