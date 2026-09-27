@@ -37,10 +37,10 @@ class ArmoredVision:
                 "item preservado para futura recuperação"
             ) from exc
 
-        affiliate_url = str(product.get("offerLink") or "").strip()
-        if not affiliate_url:
-            generated = api.generate_short_link(original)
-            affiliate_url = str(generated["short_link"]).strip()
+        # The incoming URL is identification input only. The final affiliate
+        # link must come from the exact V1-resolved product, never from a
+        # third-party affiliate short URL supplied by the source message.
+        affiliate_url = str(api.affiliate_link_for_product(product)).strip()
 
         identifier = str(
             product.get("productName")
