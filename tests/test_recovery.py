@@ -89,12 +89,23 @@ class RecoveryTests(unittest.TestCase):
     def test_rebuilds_after_studio_crash(self):
         with self.assertRaises(RuntimeError):
             Pipeline(self.db, self.storage, Vision(), CrashStudio(self.storage), self.pub).run(self.item)
-        self.assertEqual(self.db.get(self.item).state, State.FAILED)
+        self.assertEqual(self.db.get(self.item).state, State.RECOVERY)
         Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.PUBLISHED)
         self.assertTrue(row.original_path.exists())
         self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
+
+    def test_legacy_failed_item_is_reopened_into_recovery(self):
+        pipeline = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub)
+        pipeline.run(self.item)
+        self.db.fail(self.item, "legacy failure before universal recovery")
+        self.assertEqual(self.db.get(self.item).state, State.FAILED)
+
+        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
+
+        self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
+        self.assertEqual(self.pub.count, 1)
 
     def test_recovery_rebuilds_working_when_result_missing(self):
         Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
