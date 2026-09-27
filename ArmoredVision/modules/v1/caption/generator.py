@@ -9,38 +9,8 @@ import requests
 
 from .policy import CaptionPolicyError, validate_caption
 
-DEFAULT_REACTIONS = (
-    ("beleza", ("Olha esse charme ✨", ("#autocuidado", "#rotina"))),
-    ("maqui", ("Fiquei encantada 😍", ("#autocuidado", "#rotina"))),
-    ("casa", ("Que achado lindo ✨", ("#decoracao", "#rotina"))),
-    ("decor", ("Que charme aqui ✨", ("#decoracao", "#rotina"))),
-    ("moda", ("Olha esse look ✨", ("#estilo", "#rotina"))),
-    ("cozinha", ("Olha que pratico ✨", ("#casa", "#rotina"))),
-)
-
-
 class CaptionGenerationError(RuntimeError):
     pass
-
-
-def _deterministic_caption(product: dict[str, Any]) -> str:
-    context = str(product.get("category_name") or product.get("category") or "").casefold()
-    product_name = str(product.get("productName") or "")
-    candidates: list[str] = []
-
-    for key, (main, tags) in DEFAULT_REACTIONS:
-        if key in context:
-            candidates.append(main + "\n" + " ".join(tags))
-
-    candidates.append("Olha esse charme ✨\n#achadinhos #rotina")
-
-    for candidate in candidates:
-        try:
-            return validate_caption(candidate, product_name=product_name, product_context=product)
-        except CaptionPolicyError:
-            continue
-
-    raise CaptionGenerationError("nenhum fallback determinístico passou pela política")
 
 
 def _gemini_context(product: dict[str, Any]) -> str:
@@ -77,19 +47,10 @@ def _gemini_context(product: dict[str, Any]) -> str:
 
 
 class CaptionGenerator:
-    """Optional Gemini generator with a deterministic operational fallback."""
+    """Gemini-only caption generator; pipeline advances only with a valid Gemini caption."""
 
     def __init__(self, requester: Callable[..., Any] | None = None):
         self.requester = requester or requests.post
-
-    def _fallback(self, product: dict[str, Any]) -> str:
-        if os.getenv("ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK", "1") != "1":
-            raise CaptionGenerationError("fallback determinístico desativado")
-        return validate_caption(
-            _deterministic_caption(product),
-            product_name=str(product.get("productName") or ""),
-            product_context=product,
-        )
 
     def generate(self, product: dict[str, Any]) -> str:
         if os.getenv("ARMORED_CAPTION_ENABLED", "0") != "1":
@@ -97,7 +58,7 @@ class CaptionGenerator:
 
         api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
         if not api_key:
-            return self._fallback(product)
+            raise CaptionGenerationError("GEMINI_API_KEY ausente; legenda Gemini obrigatória")
 
         model = os.getenv("ARMORED_CAPTION_MODEL", "gemini-3.1-flash-lite")
         prompt = """
@@ -200,9 +161,6 @@ REGRAS:
                 last_error = exc
                 if attempt < attempts:
                     time.sleep(retry_delay)
-
-        if os.getenv("ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK", "1") == "1":
-            return self._fallback(product)
 
         raise CaptionGenerationError(
             f"Gemini não conseguiu gerar uma legenda válida após "
