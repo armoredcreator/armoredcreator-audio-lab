@@ -61,7 +61,7 @@ class Pipeline:
                     self.trace.emit(item_id, "RECOVERY", "TRANSITION", old_state=State.RECOVERY.value, new_state=State.VISION.value, reason="recovery-rebuild-vision")
             item = self.db.get(item_id)
             if item.state == State.WAITING_VISION:
-                self.trace.emit(item_id, "VISION", "BLOCKED", state=State.WAITING_VISION.value, reason=item.last_error)
+                self.trace.emit(item_id, "VISION", "BLOCKED", state=State.WAITING_VISION.value, reason=self.db.last_error(item_id) or "vision-waiting")
                 return
             if item.state == State.FAILED:
                 raise RuntimeError("FAILED item requires deterministic recovery before pipeline.run")
