@@ -25,6 +25,9 @@ class V1FakeAPI:
         self.exact_calls.append((shop_id, item_id))
         return PRODUCT.copy()
 
+    def affiliate_link_for_product(self, product):
+        return str(product["offerLink"])
+
     def generate_short_link(self, origin):
         return "https://s.shopee.com.br/generated"
 
