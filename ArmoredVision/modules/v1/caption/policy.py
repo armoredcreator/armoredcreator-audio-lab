@@ -137,14 +137,19 @@ def validate_caption(
 
     product_tokens = _meaningful_product_tokens(product_name)
     caption_tokens = set(re.findall(r"[a-z0-9]+", _fold(EMOJI_RE.sub("", text))))
-    if caption_tokens & product_tokens:
-        raise CaptionPolicyError("legenda menciona explicitamente o produto")
+
+    # A generic product-type word is allowed in a natural reaction
+    # ("Essa bolsa 😍", "Que tênis lindo 👟"). What remains blocked is a
+    # distinctive multi-word reproduction of the V1 product title.
+    product_sequences = _meaningful_product_token_sequences(product_name)
+    caption_words = _fold(EMOJI_RE.sub("", text))
+    if any(
+        phrase and re.search(rf"\\b{re.escape(phrase)}\\b", caption_words)
+        for phrase in product_sequences
+    ):
+        raise CaptionPolicyError("legenda copia expressão distintiva do produto")
 
     hashtag_tokens = {_fold(tag) for tag in hashtags}
-    if hashtag_tokens & product_tokens:
-        raise CaptionPolicyError("hashtag menciona explicitamente o produto")
-
-    product_sequences = _meaningful_product_token_sequences(product_name)
     if hashtag_tokens & product_sequences:
         raise CaptionPolicyError("hashtag recompõe explicitamente o produto")
 
