@@ -61,7 +61,7 @@ class ArmoredHub:
             return PublicationCheck.ABSENT
 
         attempts = max(1, int(os.getenv("ARMORED_TELEGRAM_VERIFY_ATTEMPTS", "3")))
-        delay = max(0.0, float(os.getenv("ARMORED_TEGRAM_VERIFY_RETRY_DELAY", os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", "2"))))
+        delay = max(0.0, float(os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", "2"))))
 
         for attempt in range(1, attempts + 1):
             matches = self._find_telegram_publications(item)
