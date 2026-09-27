@@ -10,7 +10,7 @@ from armored_core.storage import Storage
 
 
 class FailedItemStartupTests(unittest.TestCase):
-    def test_failed_item_is_not_automatically_retried_on_startup(self):
+    def test_legacy_failed_item_is_reopened_for_recovery_on_startup(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             storage = Storage(root)
@@ -33,9 +33,9 @@ class FailedItemStartupTests(unittest.TestCase):
 
             recovered = coordinator.recover_pending()
 
-            self.assertEqual(recovered, [])
-            self.assertEqual(attempted, [])
-            self.assertEqual(db.get(item_id).state.value, "FAILED")
+            self.assertEqual(recovered, [item_id])
+            self.assertEqual(attempted, [item_id])
+            self.assertEqual(db.get(item_id).state.value, "RECOVERY")
             db.close()
 
 
