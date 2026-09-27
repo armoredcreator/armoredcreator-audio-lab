@@ -115,6 +115,24 @@ class TelegramPublicationIdentityTests(unittest.TestCase):
             )
             db.close()
 
+    def test_topic_scoped_match_accepts_missing_reply_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            db, item = self._item(Path(td))
+            hub = ArmoredHub(Path(td), db)
+            message = self._message()
+            message.reply_to = None
+            self.assertTrue(
+                hub._telegram_publication_matches(
+                    message, item, 228, topic_scoped=True
+                )
+            )
+            self.assertFalse(
+                hub._telegram_publication_matches(
+                    message, item, 228, topic_scoped=False
+                )
+            )
+            db.close()
+
     def test_message_id_is_stored_unconfirmed(self):
         with tempfile.TemporaryDirectory() as td:
             db, item = self._item(Path(td))
