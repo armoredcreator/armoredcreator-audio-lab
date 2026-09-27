@@ -289,15 +289,15 @@ class SyncLifecycleTests(unittest.TestCase):
             )
 
             # Processing failures are isolated by the continuous Coordinator:
-            # the item is durably FAILED, but the LIVE loop itself does not raise.
+            # the item is durably RECOVERY, but the LIVE loop itself does not raise.
             live = first.run_live_once()
             self.assertEqual(live, ["200"])
-            self.assertEqual(db.get("200").state.value, "FAILED")
+            self.assertEqual(db.get("200").state.value, "RECOVERY")
             first.close()
 
-            # FAILED is an explicit/manual-retry state. Startup recovery only
-            # resumes deterministic in-flight states; it must not blindly retry
-            # arbitrary failures after a process restart.
+            # RECOVERY is the durable retry state. Startup must resume the
+            # same unresolved candidate rather than abandoning it or consuming
+            # a later LIVE candidate.
             restarted_source = LifecycleSource()
             restarted_source.completed = True
             restarted_source.live = []
@@ -307,9 +307,9 @@ class SyncLifecycleTests(unittest.TestCase):
             )
             recovered = second.recover_pending()
 
-            self.assertEqual(recovered, [])
-            self.assertEqual(second.db.get("200").state.value, "FAILED")
-            self.assertEqual(publisher.published, [])
+            self.assertEqual(recovered, ["200"])
+            self.assertEqual(second.db.get("200").state.value, "PUBLISHED")
+            self.assertEqual(publisher.published, ["200"])
             self.assertEqual(restarted_source.live, [])
             second.close()
 
