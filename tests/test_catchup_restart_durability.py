@@ -140,7 +140,7 @@ class CatchUpRestartTests(unittest.TestCase):
             try:
                 processed = first.run_catch_up()
                 self.assertEqual(processed, ["301"])
-                self.assertEqual(db.get("301").state.value, "FAILED")
+                self.assertEqual(db.get("301").state.value, "RECOVERY")
                 self.assertTrue(db.get("301").original_path.is_file())
             finally:
                 first.close()
