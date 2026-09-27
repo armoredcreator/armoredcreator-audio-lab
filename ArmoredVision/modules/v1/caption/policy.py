@@ -39,8 +39,7 @@ def _meaningful_product_tokens(product_name: str) -> set[str]:
 def _meaningful_product_token_sequences(product_name: str) -> set[str]:
     """Return bounded contiguous token phrases used by hashtags.
  
-    Single-token leaks are already rejected separately. This check only needs
-    short contiguous phrases to catch hashtag recombinations such as
+    Short contiguous phrases catch hashtag recombinations such as
     ``batommatte`` without generating exponential token subsets.
     """
     stop = {
@@ -153,7 +152,6 @@ def validate_caption(
     if not 2 <= len(words) <= 3:
         raise CaptionPolicyError("texto principal deve conter 2 ou 3 palavras")
 
-    product_tokens = _meaningful_product_tokens(product_name)
     caption_tokens = set(re.findall(r"[a-z0-9]+", _fold(EMOJI_RE.sub("", text))))
 
     # A generic product-type word is allowed in a natural reaction
