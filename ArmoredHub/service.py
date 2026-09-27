@@ -61,7 +61,8 @@ class ArmoredHub:
             return PublicationCheck.ABSENT
 
         attempts = max(1, int(os.getenv("ARMORED_TELEGRAM_VERIFY_ATTEMPTS", "3")))
-        delay = max(0.0, float(os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", "2"))))
+        delay = max(0.0, float(os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", "2")))
+        send_started = str(record["verification_status"] or "") == "SENT_UNVERIFIED"
 
         for attempt in range(1, attempts + 1):
             matches = self._find_telegram_publications(item)
@@ -76,15 +77,10 @@ class ArmoredHub:
                     )
                     return PublicationCheck.UNKNOWN
 
-                # A completed, authenticated topic-history/search reconciliation
-                # with zero exact matches proves the prior send is absent. This
-                # permits a single controlled retry instead of a permanent
-                # SENT_UNVERIFIED -> RECOVERY deadlock. An unavailable/failed
-                # reconciliation still returns UNKNOWN above.
                 if attempt < attempts and delay:
                     time.sleep(delay)
                     continue
-                return PublicationCheck.ABSENT
+                return PublicationCheck.UNKNOWN if send_started else PublicationCheck.ABSENT
 
             print(
                 f"[HUB][VERIFY] item={item.content_id} "
