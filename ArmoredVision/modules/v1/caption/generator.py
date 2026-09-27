@@ -80,7 +80,7 @@ sustentada pelos dados.
 REGRAS:
 - Português do Brasil.
 - A legenda DEVE combinar diretamente com o produto específico identificado no contexto V1.
-- O nome do produto é APENAS uma referência interna para interpretação. NUNCA copie o nome do produto, nenhum trecho dele ou qualquer combinação de palavras dele para a legenda ou hashtags. Extraia mentalmente o tipo de item, uso, ambiente e característica mais evidente e expresse isso com palavras novas.
+- O nome do produto é APENAS uma referência interna para interpretação. Não copie o título completo nem reproduza uma expressão distintiva do nome. É permitido usar uma palavra genérica que descreva naturalmente o tipo de item (por exemplo, "bolsa", "tênis" ou "batom") quando isso tornar a reação mais natural. Nunca copie uma combinação distintiva de palavras do título para a legenda ou hashtags.
 - O texto principal deve ser uma reação específica ao produto, evitando frases coringa que poderiam servir para qualquer item.
 - As hashtags devem ser específicas e diretamente relacionadas ao produto, categoria, uso, ambiente ou característica percebida; escolha naturalmente as hashtags mais adequadas ao contexto.
 - Antes de responder, confira internamente se frase, emoji e hashtags combinam semanticamente entre si e com o produto recebido.
@@ -90,7 +90,7 @@ REGRAS:
 - Texto principal: EXATAMENTE 2 ou 3 palavras.
 - Exatamente 1 emoji.
 - Segunda linha: exatamente 1 ou 2 hashtags relevantes ao contexto.
-- NÃO escreva o nome literal do produto.
+- NÃO copie o título completo nem uma combinação distintiva de palavras do produto.
 - NÃO escreva marca ou modelo.
 - NÃO repita descrição, atributos ou características técnicas.
 - NÃO revele quantidade, medidas, voltagem, embalagem ou termos comerciais.
