@@ -144,7 +144,7 @@ def validate_caption(
     product_sequences = _meaningful_product_token_sequences(product_name)
     caption_words = _fold(EMOJI_RE.sub("", text))
     if any(
-        phrase and re.search(rf"\\b{re.escape(phrase)}\\b", caption_words)
+        phrase and re.search(rf"\b{re.escape(phrase)}\b", caption_words)
         for phrase in product_sequences
     ):
         raise CaptionPolicyError("legenda copia expressão distintiva do produto")
