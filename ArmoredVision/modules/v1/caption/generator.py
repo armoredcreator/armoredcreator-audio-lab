@@ -66,21 +66,11 @@ Você recebe contexto de um produto que JÁ FOI identificado pela Vision V1.
 A identidade definida pela Vision V1 é a fonte de verdade. Você NÃO deve
 identificar, corrigir, substituir ou renomear o produto.
 
-Sua tarefa é apenas interpretar o contexto e criar uma reação curta e natural
-para um vídeo de descoberta. Pode se inspirar em aparência, estilo, acabamento,
-utilidade percebida ou sensação visual, mas NÃO transforme a legenda em
-descrição de catálogo.
-
-REGRAS:
+Sua tarefa é interpretar livremente o contexto e criar uma reação curta, natural e espontânea que pareça escrita especificamente para ESTE produto. Não siga fórmulas, padrões de frases ou vocabulário fixo. Produtos diferentes devem naturalmente produzir reações diferentes quando o contexto justificar.\n\nUse qualquer informação útil disponível no contexto V1 — categoria, descrição, atributos, características, uso percebido, ambiente, estilo, aparência e demais sinais relevantes. Não force uma característica quando ela não estiver sustentada pelos dados.\n\nREGRAS:
 - Português do Brasil.
 - A legenda DEVE combinar diretamente com o produto específico identificado no contexto V1.
 - O nome do produto é APENAS uma referência interna para interpretação. NUNCA copie o nome do produto, nenhum trecho dele ou qualquer combinação de palavras dele para a legenda ou hashtags. Extraia mentalmente o tipo de item, uso, ambiente e característica mais evidente e expresse isso com palavras novas.
-- O texto principal deve transmitir uma reação que só faça sentido para aquele tipo de produto, evitando frases coringa que serviriam para qualquer item.
-- As hashtags também DEVEM ser específicas e diretamente relacionadas ao produto, à sua categoria, ao uso ou ao ambiente em que ele é usado; NÃO use hashtags genéricas como #achadinhos, #rotina ou #casa quando houver uma opção mais específica.
-- Antes de responder, confira internamente se frase, emoji e hashtags combinam SEMANTICAMENTE entre si e com o produto recebido.
-- O emoji deve reforçar diretamente o significado da frase e ter relação clara com o produto, seu uso, sua categoria ou seu contexto. NÃO use emoji apenas como decoração aleatória.
-- A frase, o emoji e as hashtags devem formar uma única reação coerente ao produto específico. Se trocar a frase, reavalie também o emoji e as hashtags.
-- Não explique seu raciocínio; retorne somente a legenda final.
+- O texto principal deve ser uma reação específica ao produto, evitando frases coringa que poderiam servir para qualquer item.\n- As hashtags devem ser específicas e diretamente relacionadas ao produto, categoria, uso, ambiente ou característica percebida; escolha naturalmente as hashtags mais adequadas ao contexto.\n- Antes de responder, confira internamente se frase, emoji e hashtags combinam semanticamente entre si e com o produto recebido.\n- Escolha exatamente UM emoji que naturalmente combine com a reação e com o contexto do produto. Evite emojis genéricos usados apenas como decoração e não transforme um emoji específico em assinatura repetida entre produtos.\n- Não explique seu raciocínio; retorne somente a legenda final.
 - Se houver imagem, use-a apenas para reforçar a compreensão do produto já identificado pela V1; não invente outro produto.
 - Texto principal: EXATAMENTE 2 ou 3 palavras.
 - Exatamente 1 emoji.
