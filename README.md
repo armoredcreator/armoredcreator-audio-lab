@@ -10,8 +10,8 @@ Este README descreve o estado do código no **main após o merge da correção d
 ### Marco atual
 
 - **Repository:** `armoredcreator/armoredcreator-test`
-- **Branch operacional:** `main`
-- **Últimas correções funcionais:** PR #14 — redução do polling LIVE e dos `FloodWait`; PR #16 — contrato de erro do RVC após Recovery, mergeado em `88cf76f9`.
+- **Branch de certificação/finalização:** `fix/caption-gemini-retry` (PR #26 → `main`)
+- **Base consolidada:** inclui as correções históricas de polling/RVC/Recovery e a finalização atual de Telegram reconciliation, V1 affiliate provenance e Caption Gemini.
 - **Fluxo real já comprovado:** Telegram fonte → Sync → SQLite → Vision → Studio/RVC → Hub → Telegram destino → confirmação → cleanup.
 - **CATCH-UP → LIVE real:** comprovado com 3 itens reais.
 - **Restart em LIVE:** comprovado.
@@ -1983,11 +1983,7 @@ A auditoria continua sem escrever no SQLite e sem publicar no Telegram.
 
 ## 46.4 Estado
 
-A correção foi implementada no branch:
-
-```text
-fix/affiliate-link-canonicalization
-```
+A correção de proveniência do affiliate link está integrada na branch atual de finalização.
 
 Arquivos envolvidos:
 
