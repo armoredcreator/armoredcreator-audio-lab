@@ -240,6 +240,15 @@ class Database:
             tuple(json.loads(row["affiliate_urls_json"] or "[]")),
         )
 
+    def last_error(self, item_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT last_error FROM items WHERE content_id=?", (str(item_id),)
+        ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
+        value = row["last_error"]
+        return str(value) if value is not None else None
+
     def record_attempt(self, item_id: str) -> None:
         self.conn.execute(
             "UPDATE items SET attempts=attempts+1, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
