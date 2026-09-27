@@ -199,9 +199,28 @@ class Pipeline:
                 )
                 self.trace.emit(item_id, "PIPELINE", "SHUTDOWN", state=current.state.value, error_type=type(exc).__name__, error=str(exc))
                 raise KeyboardInterrupt from exc
-            self.db.fail(item_id, f"{type(exc).__name__}: {exc}")
-            self.log.error("[PIPELINE][ITEM %s] ERRO state=%s: %s", item_id, current.state.value, exc)
-            self.trace.emit(item_id, "PIPELINE", "FAILED", state=current.state.value, error_type=type(exc).__name__, error=str(exc))
+            reason = f"{type(exc).__name__}: {exc}"
+            # Processing-stage failures are recoverable by default. The item
+            # remains the single authoritative candidate and the Coordinator
+            # must reconcile/resume it from the persisted artifacts/state on
+            # the next recovery pass. Generic exceptions must never silently
+            # abandon the current candidate.
+            self.db.transition(item_id, State.RECOVERY, reason)
+            self.log.error(
+                "[PIPELINE][ITEM %s] ERRO RECOVERABLE state=%s: %s",
+                item_id,
+                current.state.value,
+                exc,
+            )
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "RECOVERY",
+                state=current.state.value,
+                new_state=State.RECOVERY.value,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
             raise
 
     def cleanup(self, item_id: int) -> None:
