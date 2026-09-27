@@ -59,6 +59,24 @@ def _meaningful_product_token_sequences(product_name: str) -> set[str]:
             sequences.add("".join(tokens[index:index + size]))
     return sequences
 
+def _meaningful_product_phrases(product_name: str) -> set[str]:
+    """Return short contiguous product-name phrases for caption leak checks."""
+    stop = {
+        "a", "as", "ao", "aos", "com", "da", "das", "de", "do", "dos", "e",
+        "em", "para", "por", "sem", "um", "uma", "kit", "conjunto",
+        "original", "novo", "nova",
+    }
+    tokens = [
+        token for token in re.findall(r"[a-z0-9]+", _fold(product_name))
+        if token not in stop and len(token) >= 4
+    ]
+    phrases: set[str] = set()
+    for size in (2, 3):
+        for index in range(0, max(0, len(tokens) - size + 1)):
+            phrases.add(" ".join(tokens[index:index + size]))
+    return phrases
+
+
 def _context_leak_tokens(product_context: dict[str, Any] | None) -> set[str]:
     if not product_context:
         return set()
@@ -141,14 +159,15 @@ def validate_caption(
     # A generic product-type word is allowed in a natural reaction
     # ("Essa bolsa 😍", "Que tênis lindo 👟"). What remains blocked is a
     # distinctive multi-word reproduction of the V1 product title.
-    product_sequences = _meaningful_product_token_sequences(product_name)
+    product_phrases = _meaningful_product_phrases(product_name)
     caption_words = _fold(EMOJI_RE.sub("", text))
     if any(
         phrase and re.search(rf"\b{re.escape(phrase)}\b", caption_words)
-        for phrase in product_sequences
+        for phrase in product_phrases
     ):
         raise CaptionPolicyError("legenda copia expressão distintiva do produto")
 
+    product_sequences = _meaningful_product_token_sequences(product_name)
     hashtag_tokens = {_fold(tag) for tag in hashtags}
     if hashtag_tokens & product_sequences:
         raise CaptionPolicyError("hashtag recompõe explicitamente o produto")
