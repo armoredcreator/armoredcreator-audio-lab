@@ -129,7 +129,7 @@ class InvariantTests(unittest.TestCase):
             original.unlink()
             with self.assertRaises(FileNotFoundError):
                 Pipeline(db, st, V(), S(st), P()).run(i)
-            self.assertEqual(db.get(i).state, State.FAILED)
+            self.assertEqual(db.get(i).state, State.RECOVERY)
             db.close()
 
 if __name__ == "__main__":
