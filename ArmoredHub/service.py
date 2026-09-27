@@ -376,7 +376,7 @@ class ArmoredHub:
                 message = await client.get_messages(int(chat_id), ids=int(message_id))
                 if message is None:
                     return False
-                return self._telegram_publication_matches(message, item, int(topic_id))
+                return self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=True)
             finally:
                 if client.is_connected():
                     await client.disconnect()
