@@ -9,23 +9,29 @@ from armored_core.recovery import Recovery
 from armored_core.services import PublicationResult, StudioResult, SyncService, VisionResult
 from armored_core.storage import Storage
 
+
 class Vision:
     def identify(self, item):
         return VisionResult("recover-final", "https://example.invalid/a")
 
+
 class Studio:
     def __init__(self, storage):
         self.storage = storage
+        self.calls = 0
 
     def process(self, item):
+        self.calls += 1
         w = self.storage.working(item.item_id)
         w.write_bytes(item.original_path.read_bytes())
         r = self.storage.result(item.item_id, item.affiliate_name or "recover-final")
         r.write_bytes(w.read_bytes())
         return StudioResult(w, r)
 
+
 class CrashStudio(Studio):
     def process(self, item):
+        self.calls += 1
         raise RuntimeError("simulated studio crash")
 
 
@@ -40,6 +46,7 @@ class VisionWaitThenResolve:
             raise VisionUnresolvedError("simulated unresolved vision")
         return VisionResult("recover-final", "https://example.invalid/a")
 
+
 class Publisher:
     def __init__(self):
         self.ids = set()
@@ -52,6 +59,7 @@ class Publisher:
         self.count += 1
         self.ids.add(item.item_id)
         return PublicationResult(True, str(self.count))
+
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
@@ -72,13 +80,9 @@ class RecoveryTests(unittest.TestCase):
         vision = VisionWaitThenResolve()
         pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub)
 
-        # First Vision attempt is unresolved and must become a durable
-        # WAITING_VISION state rather than being treated as completed.
         pipeline.run(self.item)
         self.assertEqual(self.db.get(self.item).state, State.WAITING_VISION)
 
-        # Recovery owns the retry. It must re-enter VISION and continue the
-        # same item through Studio and publication when Vision resolves.
         Recovery(self.db, self.storage, vision, Studio(self.storage), self.pub).reconcile(self.item)
 
         row = self.db.get(self.item)
@@ -86,15 +90,34 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(vision.calls, 2)
         self.assertEqual(self.pub.count, 1)
 
-    def test_rebuilds_after_studio_crash(self):
+    def test_rebuilds_after_studio_crash_from_original_not_partial_artifacts(self):
+        studio = CrashStudio(self.storage)
         with self.assertRaises(RuntimeError):
-            Pipeline(self.db, self.storage, Vision(), CrashStudio(self.storage), self.pub).run(self.item)
-        self.assertEqual(self.db.get(self.item).state, State.RECOVERY)
-        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
+            Pipeline(self.db, self.storage, Vision(), studio, self.pub).run(self.item)
+
+        row = self.db.get(self.item)
+        self.assertEqual(row.state, State.RECOVERY)
+
+        # Simulate a crashed RVC/Studio leaving corrupt derived artifacts.
+        working = self.storage.working(self.item)
+        result = self.storage.result(self.item, "recover-final")
+        working.write_bytes(b"PARTIAL-WORKING")
+        result.write_bytes(b"PARTIAL-RESULT")
+        self.db.set_working(self.item, working)
+        self.db.set_result(self.item, result)
+
+        clean_studio = Studio(self.storage)
+        Recovery(
+            self.db, self.storage, Vision(), clean_studio, self.pub
+        ).reconcile(self.item)
+
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.PUBLISHED)
-        self.assertTrue(row.original_path.exists())
+        self.assertEqual(clean_studio.calls, 1)
+        self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
+        self.assertEqual(row.result_path.read_bytes(), b"VIDEO")
         self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
+        self.assertEqual(self.pub.count, 1)
 
     def test_legacy_failed_item_is_reopened_into_recovery(self):
         pipeline = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub)
@@ -110,7 +133,6 @@ class RecoveryTests(unittest.TestCase):
     def test_recovery_rebuilds_working_when_result_missing(self):
         Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
         row = self.db.get(self.item)
-        # Simulate a crash before publication after the result disappears.
         self.db.transition(self.item, State.STUDIO, "test-result-missing")
         result = self.storage.result(self.item, row.affiliate_name or "recover-final")
         result.unlink(missing_ok=True)
@@ -128,8 +150,6 @@ class RecoveryTests(unittest.TestCase):
         vision = Vision()
         studio = Studio(self.storage)
 
-        # First pass reaches publication and becomes RECOVERY after an
-        # ambiguous Telegram outcome, while the durable result remains.
         pipeline = Pipeline(self.db, self.storage, vision, studio, publisher)
         pipeline.run(self.item)
         row = self.db.get(self.item)
@@ -137,8 +157,6 @@ class RecoveryTests(unittest.TestCase):
         self.assertTrue(row.result_path.is_file())
         self.assertEqual(publisher.count, 0)
 
-        # Recovery must stop on UNKNOWN. It must never fall through to the
-        # durable-result path and send the same result a second time.
         with self.assertRaisesRegex(RuntimeError, "publication-check-uncertain-recovery-stopped"):
             Recovery(self.db, self.storage, vision, studio, publisher).reconcile(self.item)
 
@@ -149,6 +167,7 @@ class RecoveryTests(unittest.TestCase):
         Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
         Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
         self.assertTrue(self.db.get(self.item).original_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
