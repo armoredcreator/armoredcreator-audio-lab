@@ -305,28 +305,45 @@ class ArmoredHub:
                 if not query:
                     return []
 
-                result = await client(
-                    functions.messages.SearchRequest(
-                        peer=entity,
-                        q=query,
-                        from_id=None,
-                        top_msg_id=int(topic_id),
-                        filter=InputMessagesFilterEmpty(),
-                        min_date=None,
-                        max_date=None,
-                        offset_id=0,
-                        add_offset=0,
-                        limit=100,
-                        max_id=0,
-                        min_id=0,
-                        hash=0,
-                    )
-                )
-                for message in getattr(result, "messages", []) or []:
-                    if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=True):
+                # Forum-topic-scoped Telegram search is not a reliable sole source of
+                # truth: Telegram/Telethon can return no results for an existing message
+                # when top_msg_id/reply_to filtering is used. Fall back to a normal
+                # server-side text search and validate the topic locally.
+                async for message in client.iter_messages(
+                    entity,
+                    search=query,
+                    limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_SEARCH_LIMIT", "100")),
+                ):
+                    if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=False):
                         message_id = str(getattr(message, "id", ""))
                         if message_id:
                             exact_matches.append(message_id)
+
+                # Keep the raw API search as a second independent fallback for
+                # installations where iter_messages(search=...) behaves differently.
+                if not exact_matches:
+                    result = await client(
+                        functions.messages.SearchRequest(
+                            peer=entity,
+                            q=query,
+                            from_id=None,
+                            top_msg_id=0,
+                            filter=InputMessagesFilterEmpty(),
+                            min_date=None,
+                            max_date=None,
+                            offset_id=0,
+                            add_offset=0,
+                            limit=100,
+                            max_id=0,
+                            min_id=0,
+                            hash=0,
+                        )
+                    )
+                    for message in getattr(result, "messages", []) or []:
+                        if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=False):
+                            message_id = str(getattr(message, "id", ""))
+                            if message_id:
+                                exact_matches.append(message_id)
 
                 return sorted(set(exact_matches))
             finally:
