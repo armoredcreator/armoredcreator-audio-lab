@@ -54,7 +54,7 @@ class HubPublicationPackageTests(unittest.TestCase):
         )
 
 
-    def test_ambiguous_send_zero_matches_is_unknown_not_absent(self):
+    def test_sent_unverified_zero_matches_is_absent(self):
         with TemporaryDirectory() as td:
             db = Database(Path(td) / "armoredcreator.db")
             try:
@@ -70,12 +70,12 @@ class HubPublicationPackageTests(unittest.TestCase):
                 hub._find_telegram_publications = lambda _item: []
                 self.assertEqual(
                     hub.check_publication(item),
-                    __import__("armored_core.models", fromlist=["PublicationCheck"]).PublicationCheck.UNKNOWN,
+                    __import__("armored_core.models", fromlist=["PublicationCheck"]).PublicationCheck.ABSENT,
                 )
             finally:
                 db.close()
 
-    def test_ambiguous_send_is_not_republished_after_recovery(self):
+    def test_absent_after_ambiguous_send_restarts_publication(self):
         with TemporaryDirectory() as td:
             db = Database(Path(td) / "armoredcreator.db")
             try:
@@ -100,7 +100,11 @@ class HubPublicationPackageTests(unittest.TestCase):
                 with self.assertRaises(PublicationUnknownError):
                     hub.publish_once(item)
 
-                self.assertEqual(calls, ["send"])
+                # A completed verification with zero exact matches is ABSENT.
+                # Recovery is therefore allowed to restart from the original
+                # rather than treating the old ambiguous send as evidence of
+                # a publication.
+                self.assertEqual(calls, ["send", "send"])
                 record = db.publication(item.item_id)
                 self.assertIsNotNone(record)
                 self.assertEqual(record["verification_status"], "SENT_UNVERIFIED")
