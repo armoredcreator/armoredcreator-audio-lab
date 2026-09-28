@@ -105,20 +105,16 @@ class Recovery:
                 self.pipeline.cleanup(item_id)
                 return
 
-            # ABSENT: reuse a proven durable result if one still exists.
-            result = item.result_path
-            if result and result.is_file():
-                self._resume_durable_result(
-                    item_id,
-                    "publication-absent-reuse-durable-result",
-                )
-                return
-
-            # No durable result remains: rebuild derived processing safely.
+            # ABSENT means there is no Telegram evidence of a completed
+            # publication. Treat the whole derived processing chain as invalid
+            # and restart from the immutable ORIGINAL. Never reuse a result
+            # merely because it still exists on disk.
             if item.affiliate_name:
                 self._rebuild_processing_from_original(item_id)
                 return
 
+            # The only safe exception is unresolved Vision: without resolved
+            # product metadata, restart at Vision from the immutable ORIGINAL.
             self.db.transition(item_id, State.VISION, "publication-absent-rebuild-vision")
             self.pipeline.run(item_id)
             return
