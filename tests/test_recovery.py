@@ -51,8 +51,11 @@ class Publisher:
     def __init__(self):
         self.ids = set()
         self.count = 0
+        self.always_absent = False
 
     def check_publication(self, item):
+        if self.always_absent:
+            return PublicationCheck.ABSENT
         return PublicationCheck.CONFIRMED if item.item_id in self.ids else PublicationCheck.ABSENT
 
     def publish(self, item):
@@ -159,6 +162,11 @@ class RecoveryTests(unittest.TestCase):
         working.write_bytes(b"STALE-WORKING")
         self.db.set_working(self.item, working)
 
+        # The real Telegram verifier will report ABSENT after all searches
+        # complete with zero exact matches. Model that boundary explicitly;
+        # the initial successful publication must not make this synthetic
+        # recovery test appear CONFIRMED.
+        publisher.always_absent = True
         studio.calls = 0
         Recovery(
             self.db, self.storage, vision, studio, publisher
