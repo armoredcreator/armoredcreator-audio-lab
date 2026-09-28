@@ -121,6 +121,29 @@ class VisionWaitingTests(unittest.TestCase):
             finally:
                 restarted_db.close()
 
+    def test_coordinator_startup_does_not_auto_retry_waiting_vision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            item_id = self._item(db, storage, "vision-waiting-startup-1")
+            vision = _UnresolvedVision()
+            studio = _Studio()
+            publisher = _Publisher()
+            Pipeline(db, storage, vision, studio, publisher).run(item_id)
+
+            from armored_core.coordinator import Coordinator
+            coordinator = Coordinator(
+                db, storage, vision, studio, publisher, source=None
+            )
+            try:
+                recovered = coordinator.recover_pending()
+                self.assertEqual(recovered, [])
+                self.assertEqual(db.get(item_id).state, State.WAITING_VISION)
+                self.assertTrue(db.get(item_id).original_path.is_file())
+            finally:
+                db.close()
+
     def test_armored_vision_maps_exact_not_found_to_unresolved(self):
         item = type("ItemStub", (), {
             "original_url": "https://shopee.com.br/a-i.123.456",
