@@ -115,8 +115,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(row.state, State.PUBLISHED)
         self.assertEqual(clean_studio.calls, 1)
         self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
-        self.assertEqual(row.result_path.read_bytes(), b"VIDEO")
-        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
+        # Successful publication performs the normal cleanup; only the immutable original remains.\n        self.assertFalse(row.result_path.exists())\n        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
         self.assertEqual(self.pub.count, 1)
 
     def test_legacy_failed_item_is_reopened_into_recovery(self):
