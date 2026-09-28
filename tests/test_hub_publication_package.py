@@ -54,6 +54,54 @@ class HubPublicationPackageTests(unittest.TestCase):
         )
 
 
+    def test_telegram_send_timeout_logs_real_error_and_reconciliation(self):
+        from unittest.mock import patch
+
+        from telegram.error import TimedOut
+        from armored_core.models import PublicationCheck
+
+        with TemporaryDirectory() as td:
+            db = Database(Path(td) / "armoredcreator.db")
+            try:
+                output = Path(td) / "result.mp4"
+                output.write_bytes(b"test-video")
+                item = make_item(result_path=output)
+                hub = ArmoredHub(Path(td), db)
+
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "ARMORED_CREATOR_BOT_TOKEN": "test-token",
+                        "ARMORED_HUB_TOPIC_ID": "228",
+                    },
+                    clear=False,
+                ), patch.object(hub, "_resolve_destination_chat_id", return_value="-100123"), patch.object(
+                    hub, "_video_metadata", return_value=(720, 1280, 10)
+                ), patch.object(
+                    hub, "_run_async",
+                    side_effect=TimedOut("Telegram read timeout after 60 seconds"),
+                ), patch.object(
+                    hub, "check_publication", return_value=PublicationCheck.ABSENT
+                ), patch(
+                    "builtins.print"
+                ) as mocked_print:
+                    with self.assertRaises(PublicationUnknownError):
+                        hub._publish_telegram(item, output)
+
+                messages = [
+                    call.args[0]
+                    for call in mocked_print.call_args_list
+                    if call.args
+                    and "[HUB][TELEGRAM][SEND_ERROR]" in str(call.args[0])
+                ]
+                self.assertEqual(len(messages), 1)
+                self.assertIn("exception=TimedOut", messages[0])
+                self.assertIn("Telegram read timeout after 60 seconds", messages[0])
+                self.assertIn("reconciliation=ABSENT", messages[0])
+                self.assertIn("decision=UNKNOWN", messages[0])
+            finally:
+                db.close()
+
     def test_sent_unverified_zero_matches_is_absent(self):
         with TemporaryDirectory() as td:
             db = Database(Path(td) / "armoredcreator.db")
