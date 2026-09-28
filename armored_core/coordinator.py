@@ -261,49 +261,29 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
-                    # WAITING_VISION is an unresolved candidate, not a successful
-                    # pipeline attempt. Re-enter the durable recovery path once.
-                    # If Vision remains unresolved, stop CATCH-UP here: the current
-                    # candidate owns the checkpoint and the next candidate must not
-                    # be silently consumed.
-                    if current.state == State.WAITING_VISION:
+                    # An unresolved current candidate owns the historical
+                    # checkpoint. CATCH-UP must remain blocked on this same item
+                    # until durable recovery resolves it; returning here would let
+                    # _run_forever incorrectly enter LIVE and consume newer items.
+                    retry_seconds = max(
+                        1.0,
+                        float(os.getenv("ARMORED_CATCHUP_RECOVERY_RETRY_SECONDS", "15")),
+                    )
+                    while current.state in (State.WAITING_VISION, State.RECOVERY):
                         try:
                             self.recover(item_id)
                         except Exception as recovery_exc:
                             import logging
                             logging.getLogger(__name__).warning(
-                                "[COORDINATOR][CATCH-UP] Item %s permanece em WAITING_VISION; "
-                                "não avançará para o próximo candidato: %s",
+                                "[COORDINATOR][CATCH-UP] Item %s permanece em %s; "
+                                "checkpoint bloqueado. Nova reconciliação em %.1fs: %s",
                                 item_id,
+                                current.state.value,
+                                retry_seconds,
                                 recovery_exc,
                             )
+                            await asyncio.sleep(retry_seconds)
                         current = self.db.get(item_id)
-                        if current.state == State.WAITING_VISION:
-                            processed.append(item_id)
-                            self._last_catch_up_completed_count = completed_count
-                            return processed
-
-                    # RECOVERY is an active unresolved state. Never allow
-                    # CATCH-UP to advance to another Telegram candidate while
-                    # publication reality is still ambiguous. Reconcile the
-                    # current item immediately; if Telegram remains UNKNOWN,
-                    # stop this run and require deterministic recovery/restart.
-                    if current.state == State.RECOVERY:
-                        try:
-                            self.recover(item_id)
-                        except Exception as recovery_exc:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                "[COORDINATOR][CATCH-UP] Item %s permanece em RECOVERY; "
-                                "não avançará para o próximo candidato: %s",
-                                item_id,
-                                recovery_exc,
-                            )
-                        current = self.db.get(item_id)
-                        if current.state == State.RECOVERY:
-                            processed.append(item_id)
-                            self._last_catch_up_completed_count = completed_count
-                            return processed
 
                     if (
                         current.state == State.PUBLISHED
@@ -515,6 +495,18 @@ class Coordinator:
             if self.db.historical_complete() and not self.db.has_sync_checkpoints():
                 self.db.set_sync_mode("CATCH_UP")
             catch_up_processed = await self.run_catch_up_async()
+
+            # LIVE is legal only after the historical source has explicitly
+            # committed CATCH-UP completion. Any incomplete/blocked historical
+            # run must never fall through into LIVE.
+            if not self.db.historical_complete():
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
+                    "LIVE bloqueado. O processo permanecerá encerrado até a "
+                    "reconciliação/reexecução do candidato pendente."
+                )
+                return
 
             # A bounded CATCH-UP run remains opt-in certification behavior.
             # By default it terminates here, preserving the existing contract.
