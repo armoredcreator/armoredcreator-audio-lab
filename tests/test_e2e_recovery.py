@@ -328,17 +328,17 @@ class EndToEndRecoveryTests(unittest.TestCase):
             coordinator.run = enter_recovery
             recovery_calls = []
 
-            def unexpected_inline_recovery(content_id):
+            def recover_for_normal_path(content_id):
                 recovery_calls.append(str(content_id))
-                raise AssertionError("CATCH-UP não deve reconciliar inline após exceção do pipeline")
+                raise RuntimeError("publication-check-uncertain-recovery-stopped")
 
-            coordinator.recover = unexpected_inline_recovery
+            coordinator.recover = recover_for_normal_path
 
             processed = __import__("asyncio").run(coordinator.run_catch_up_async())
 
             self.assertEqual(processed, [str(item_id)])
             self.assertEqual(catch_up_source.calls, 1)
-            self.assertEqual(recovery_calls, [])
+            self.assertEqual(recovery_calls, [str(item_id)])
             self.assertEqual(coordinator.db.get(item_id).state, State.RECOVERY)
             coordinator.close()
 
