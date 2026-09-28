@@ -158,6 +158,7 @@ class RecoveryTests(unittest.TestCase):
         # trusted as a safe continuation point.
         self.db.transition(self.item, State.RECOVERY, "test-publication-absent")
         self.db.publication_started(self.item)
+        self.db.publication_send_started(self.item)
         working = self.storage.working(self.item)
         working.write_bytes(b"STALE-WORKING")
         self.db.set_working(self.item, working)
