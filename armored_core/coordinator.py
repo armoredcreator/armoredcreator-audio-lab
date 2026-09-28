@@ -261,12 +261,12 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
-                    # An unresolved current candidate owns the historical
-                    # checkpoint. Reconcile it once during this CATCH-UP invocation.
-                    # If it remains unresolved, stop CATCH-UP here. The caller must
-                    # not advance to another historical candidate or fall through to
-                    # LIVE; the persisted checkpoint remains behind this item.
-                    if current.state in (State.WAITING_VISION, State.RECOVERY):
+                    # A technical RECOVERY item may be reconciled once during this
+                    # CATCH-UP invocation. WAITING_VISION is different: it is the
+                    # explicit Vision V1 "product not resolved" boundary and must
+                    # not be retried automatically. In either case, an unresolved
+                    # current candidate owns the historical checkpoint.
+                    if current.state == State.RECOVERY:
                         try:
                             self.recover(item_id)
                         except Exception as recovery_exc:
@@ -639,7 +639,7 @@ class Coordinator:
 
     def recover_pending(self):
         states = (
-            State.RECEIVED.value, State.VISION.value, State.WAITING_VISION.value,
+            State.RECEIVED.value, State.VISION.value,
             State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
             State.FAILED.value,
         )
