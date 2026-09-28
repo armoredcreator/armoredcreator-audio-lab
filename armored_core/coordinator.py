@@ -262,28 +262,28 @@ class Coordinator:
                     current = self.db.get(item_id)
 
                     # An unresolved current candidate owns the historical
-                    # checkpoint. CATCH-UP must remain blocked on this same item
-                    # until durable recovery resolves it; returning here would let
-                    # _run_forever incorrectly enter LIVE and consume newer items.
-                    retry_seconds = max(
-                        1.0,
-                        float(os.getenv("ARMORED_CATCHUP_RECOVERY_RETRY_SECONDS", "15")),
-                    )
-                    while current.state in (State.WAITING_VISION, State.RECOVERY):
+                    # checkpoint. Reconcile it once during this CATCH-UP invocation.
+                    # If it remains unresolved, stop CATCH-UP here. The caller must
+                    # not advance to another historical candidate or fall through to
+                    # LIVE; the persisted checkpoint remains behind this item.
+                    if current.state in (State.WAITING_VISION, State.RECOVERY):
                         try:
                             self.recover(item_id)
                         except Exception as recovery_exc:
                             import logging
                             logging.getLogger(__name__).warning(
                                 "[COORDINATOR][CATCH-UP] Item %s permanece em %s; "
-                                "checkpoint bloqueado. Nova reconciliação em %.1fs: %s",
+                                "checkpoint bloqueado: %s",
                                 item_id,
                                 current.state.value,
-                                retry_seconds,
                                 recovery_exc,
                             )
-                            await asyncio.sleep(retry_seconds)
                         current = self.db.get(item_id)
+
+                        if current.state in (State.WAITING_VISION, State.RECOVERY):
+                            processed.append(item_id)
+                            self._last_catch_up_completed_count = completed_count
+                            return processed
 
                     if (
                         current.state == State.PUBLISHED
@@ -494,49 +494,49 @@ class Coordinator:
         ):
             if self.db.historical_complete() and not self.db.has_sync_checkpoints():
                 self.db.set_sync_mode("CATCH_UP")
-            catch_up_processed = await self.run_catch_up_async()
-
-            # LIVE is legal only after the historical source has explicitly
-            # committed CATCH-UP completion. Any incomplete/blocked historical
-            # run must never fall through into LIVE.
-            if not self.db.historical_complete():
-                import logging
-                logging.getLogger(__name__).warning(
-                    "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
-                    "LIVE bloqueado. O processo permanecerá encerrado até a "
-                    "reconciliação/reexecução do candidato pendente."
-                )
-                return
+            await self.run_catch_up_async()
 
             # A bounded CATCH-UP run remains opt-in certification behavior.
             # By default it terminates here, preserving the existing contract.
-            # A second explicit certification flag may instead perform a safe
-            # history-to-LIVE cutover after the requested number of completed
-            # items.
             bounded_limit = getattr(self.source, "_historical_limit", None)
-            if (
+            cert_then_live = (
+                os.getenv("ARMORED_CERT_CATCHUP_THEN_LIVE", "0").strip() == "1"
+            )
+            bounded_completed = (
                 bounded_limit is not None
                 and self._last_catch_up_completed_count >= int(bounded_limit)
-            ):
-                cert_then_live = (
-                    os.getenv("ARMORED_CERT_CATCHUP_THEN_LIVE", "0").strip() == "1"
-                )
-                if not cert_then_live:
-                    return
+            )
 
-                cutover = getattr(self.source, "prepare_live_cutover_async", None)
-                if cutover is None:
-                    raise RuntimeError(
-                        "ARMORED_CERT_CATCHUP_THEN_LIVE=1 exige que a fonte "
-                        "implemente prepare_live_cutover_async()"
+            # An unresolved historical candidate blocks the checkpoint and must
+            # never fall through into LIVE. The only exception is the explicit
+            # bounded certification flow, which first performs the source's
+            # durable history-to-LIVE cutover.
+            if not self.db.historical_complete():
+                if bounded_completed and cert_then_live:
+                    cutover = getattr(self.source, "prepare_live_cutover_async", None)
+                    if cutover is None:
+                        raise RuntimeError(
+                            "ARMORED_CERT_CATCHUP_THEN_LIVE=1 exige que a fonte "
+                            "implemente prepare_live_cutover_async()"
+                        )
+                    import logging
+                    await cutover()
+                    logging.getLogger(__name__).info(
+                        "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
+                        "cutover histórico seguro executado; entrando em LIVE"
                     )
 
-                import logging
-                await cutover()
-                logging.getLogger(__name__).info(
-                    "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
-                    "cutover histórico seguro executado; entrando em LIVE"
-                )
+                if not self.db.historical_complete():
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
+                        "LIVE bloqueado. O processo permanecerá encerrado até a "
+                        "reconciliação/reexecução do candidato pendente."
+                    )
+                    return
+
+            if bounded_completed and not cert_then_live:
+                return
 
         import logging
         logging.getLogger(__name__).info(
