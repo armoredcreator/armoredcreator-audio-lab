@@ -10,16 +10,7 @@ from .storage import Storage
 
 
 class Recovery:
-    """Evidence-driven recovery for one durable pipeline item.
-
-    Recovery never assumes that the last persisted stage is a valid artifact.
-    For processing failures it reconstructs the video from the last safe,
-    immutable boundary instead of resuming potentially partial Studio/RVC files.
-
-    Telegram publication ambiguity is deliberately handled separately: when a
-    publication attempt already exists, Recovery reconciles Telegram first and
-    never rebuilds or republishes while the external outcome is UNKNOWN.
-    """
+    """Evidence-driven recovery for one durable pipeline item."""
 
     def __init__(
         self,
@@ -33,12 +24,7 @@ class Recovery:
         self.pipeline = Pipeline(db, storage, vision, studio, publisher)
 
     def _reset_processing_artifacts(self, item_id: str) -> None:
-        """Remove every derived workspace artifact and force a fresh Studio/RVC run.
-
-        The immutable ORIGINAL is the only artifact trusted after a processing
-        failure. This intentionally avoids resuming a partially written
-        working/result file whose existence alone does not prove correctness.
-        """
+        """Keep only the immutable ORIGINAL before rebuilding derived artifacts."""
         item = self.db.get(item_id)
         original = item.original_path.resolve()
         workspace = item.workspace.resolve()
@@ -63,13 +49,14 @@ class Recovery:
         self.db.transition(item_id, State.STUDIO, "recovery-rebuild-studio-from-original")
         self.pipeline.run(item_id)
 
+    def _resume_durable_result(self, item_id: str, reason: str) -> None:
+        self.db.transition(item_id, State.PUBLISHING, reason)
+        self.pipeline.run(item_id)
+
     def reconcile(self, item_id: str) -> None:
         item = self.db.get(item_id)
 
-        # WAITING_VISION remains the existing Vision recovery contract. In
-        # particular, ShopeeProductNotFound is represented by Vision V1 as
-        # VisionUnresolvedError and remains WAITING_VISION instead of becoming
-        # a generic processing failure.
+        # ShopeeProductNotFound/VisionUnresolved remains WAITING_VISION.
         if item.state == State.WAITING_VISION:
             self.db.transition(item_id, State.VISION, "recovery-retry-waiting-vision")
             item = self.db.get(item_id)
@@ -87,10 +74,8 @@ class Recovery:
         self.db.transition(item_id, State.RECOVERY, "startup-recovery")
         item = self.db.get(item_id)
 
-        # Publication is a separate external side-effect boundary. Once a
-        # publication attempt exists, reconcile Telegram before touching video
-        # artifacts. UNKNOWN is a hard safety stop; ABSENT may reuse a valid
-        # durable result and publish exactly once through the normal pipeline.
+        # Telegram is a separate side-effect boundary. Reconcile it before
+        # changing processing artifacts whenever a publication attempt exists.
         pub = self.db.publication(item_id)
         if pub:
             if pub["confirmed"]:
@@ -104,6 +89,7 @@ class Recovery:
             check = self.pipeline.publisher.check_publication(item)
             if check == PublicationCheck.UNKNOWN:
                 raise RuntimeError("publication-check-uncertain-recovery-stopped")
+
             if check == PublicationCheck.CONFIRMED:
                 refreshed = self.db.publication(item_id)
                 message_id = refreshed["published_message_id"] if refreshed else None
@@ -114,17 +100,16 @@ class Recovery:
                 self.pipeline.cleanup(item_id)
                 return
 
-            # ABSENT means the publication boundary is unresolved no longer.
-            # Keep the durable result and let Pipeline perform the controlled
-            # publication. No Vision/Studio rebuild is necessary.
+            # ABSENT: reuse a proven durable result if one still exists.
             result = item.result_path
             if result and result.is_file():
-                self.db.transition(item_id, State.PUBLISHING, "publication-absent-reuse-durable-result")
-                self.pipeline.run(item_id)
+                self._resume_durable_result(
+                    item_id,
+                    "publication-absent-reuse-durable-result",
+                )
                 return
 
-            # The publication attempt exists but its result disappeared. The
-            # video must be rebuilt before a new publication attempt.
+            # No durable result remains: rebuild derived processing safely.
             if item.affiliate_name:
                 self._rebuild_processing_from_original(item_id)
                 return
@@ -133,15 +118,28 @@ class Recovery:
             self.pipeline.run(item_id)
             return
 
-        # No publication attempt exists. A processing-stage failure must not
-        # resume from the mere existence of working/result files: they may be
-        # partial artifacts from a crashed Studio/RVC process. Rebuild the
-        # complete derived video from the immutable ORIGINAL.
+        # No publication attempt exists. A real durable result is already a
+        # safe publication boundary; do not destroy it just because the item
+        # is in RECOVERY/FAILED.
+        result = item.result_path
+        if not result and item.affiliate_url:
+            result = self.storage.result(
+                item_id,
+                item.affiliate_url,
+                item.affiliate_name,
+            )
+        if result and result.is_file():
+            if item.result_path is None:
+                self.db.set_result(item_id, result)
+            self._resume_durable_result(item_id, "recovery-resume-durable-result")
+            return
+
+        # No proven final result. Any working/derived artifacts may be partial,
+        # so discard them and rebuild from the immutable ORIGINAL.
         if item.affiliate_name:
             self._rebuild_processing_from_original(item_id)
             return
 
-        # No resolved product metadata means the only safe reconstruction point
-        # is Vision. This covers technical Vision failures persisted as RECOVERY.
+        # Without resolved product metadata, Vision is the only safe boundary.
         self.db.transition(item_id, State.VISION, "recovery-rebuild-vision-from-original")
         self.pipeline.run(item_id)
