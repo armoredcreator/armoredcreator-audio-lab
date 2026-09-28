@@ -80,7 +80,12 @@ class ArmoredHub:
                 if attempt < attempts and delay:
                     time.sleep(delay)
                     continue
-                return PublicationCheck.UNKNOWN if send_started else PublicationCheck.ABSENT
+                # No exact Telegram evidence was found after all
+                # verification passes. Treat the publication as ABSENT so
+                # recovery can discard all derived artifacts and rebuild from
+                # the immutable ORIGINAL. UNKNOWN remains reserved for an
+                # inconclusive verification operation (None/error).
+                return PublicationCheck.ABSENT
 
             print(
                 f"[HUB][VERIFY] item={item.content_id} "

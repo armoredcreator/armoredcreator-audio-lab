@@ -51,8 +51,11 @@ class Publisher:
     def __init__(self):
         self.ids = set()
         self.count = 0
+        self.always_absent = False
 
     def check_publication(self, item):
+        if self.always_absent:
+            return PublicationCheck.ABSENT
         return PublicationCheck.CONFIRMED if item.item_id in self.ids else PublicationCheck.ABSENT
 
     def publish(self, item):
@@ -139,6 +142,44 @@ class RecoveryTests(unittest.TestCase):
         Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
         self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
         self.assertEqual(self.pub.count, 1)
+
+    def test_absent_publication_rebuilds_from_original_even_with_durable_result(self):
+        vision = Vision()
+        studio = Studio(self.storage)
+        publisher = Publisher()
+        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher)
+
+        pipeline.run(self.item)
+        row = self.db.get(self.item)
+        self.assertEqual(row.state, State.PUBLISHED)
+
+        # Simulate a prior publication attempt whose Telegram message has no
+        # matching evidence. A durable result may still exist, but it is not
+        # trusted as a safe continuation point.
+        self.db.transition(self.item, State.RECOVERY, "test-publication-absent")
+        self.db.publication_started(self.item)
+        self.db.publication_send_started(self.item)
+        self.db.publication_message_sent(self.item, "stale-message")
+        working = self.storage.working(self.item)
+        working.write_bytes(b"STALE-WORKING")
+        self.db.set_working(self.item, working)
+
+        # The real Telegram verifier will report ABSENT after all searches
+        # complete with zero exact matches. Model that boundary explicitly;
+        # the initial successful publication must not make this synthetic
+        # recovery test appear CONFIRMED.
+        publisher.always_absent = True
+        studio.calls = 0
+        Recovery(
+            self.db, self.storage, vision, studio, publisher
+        ).reconcile(self.item)
+
+        row = self.db.get(self.item)
+        self.assertEqual(row.state, State.PUBLISHED)
+        self.assertEqual(studio.calls, 1)
+        self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
+        self.assertFalse(row.result_path.exists())
+        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
 
     def test_unknown_publication_never_resumes_durable_result(self):
         class AmbiguousPublisher(Publisher):
