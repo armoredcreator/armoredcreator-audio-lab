@@ -159,6 +159,7 @@ class RecoveryTests(unittest.TestCase):
         self.db.transition(self.item, State.RECOVERY, "test-publication-absent")
         self.db.publication_started(self.item)
         self.db.publication_send_started(self.item)
+        self.db.publication_message_sent(self.item, "stale-message")
         working = self.storage.working(self.item)
         working.write_bytes(b"STALE-WORKING")
         self.db.set_working(self.item, working)
