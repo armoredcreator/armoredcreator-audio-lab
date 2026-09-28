@@ -310,29 +310,16 @@ class Coordinator:
                 )
 
                 # Pipeline.run() persists recoverable failures as RECOVERY and
-                # then re-raises. Do not let that exception bypass the unresolved
-                # candidate guard below: this candidate still owns the historical
-                # checkpoint and CATCH-UP must stop before asking Sync for another
-                # candidate. Reconcile it once, exactly as in the non-exception
-                # path, and stop if it remains unresolved.
+                # then re-raises. Do not reconcile it inline here: an exception
+                # may represent a crash/process interruption whose durable state
+                # must be recovered only by the explicit recovery/startup path.
+                # The current candidate still owns the historical checkpoint, so
+                # CATCH-UP must stop before asking Sync for another candidate.
                 current = self.db.get(item_id)
                 if current.state in (State.WAITING_VISION, State.RECOVERY):
-                    try:
-                        self.recover(item_id)
-                    except Exception as recovery_exc:
-                        logging.getLogger(__name__).warning(
-                            "[COORDINATOR][CATCH-UP] Item %s permanece em %s; "
-                            "checkpoint bloqueado: %s",
-                            item_id,
-                            current.state.value,
-                            recovery_exc,
-                        )
-                    current = self.db.get(item_id)
-
-                    if current.state in (State.WAITING_VISION, State.RECOVERY):
-                        processed.append(item_id)
-                        self._last_catch_up_completed_count = completed_count
-                        return processed
+                    processed.append(item_id)
+                    self._last_catch_up_completed_count = completed_count
+                    return processed
 
             # Count only a fully published and cleaned item.
             current = self.db.get(item_id)
