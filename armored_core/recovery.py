@@ -118,6 +118,18 @@ class Recovery:
             self.pipeline.run(item_id)
             return
 
+        # A processing-stage exception is stronger evidence than the mere
+        # presence of a result file. If Studio failed, any derived result in
+        # the workspace may be partial/corrupt; rebuild from ORIGINAL.
+        last_event = self.db.last_state_event(item_id)
+        if (
+            last_event
+            and last_event["old_state"] == State.STUDIO.value
+            and last_event["new_state"] == State.RECOVERY.value
+        ):
+            self._rebuild_processing_from_original(item_id)
+            return
+
         # No publication attempt exists. A real durable result is already a
         # safe publication boundary; do not destroy it just because the item
         # is in RECOVERY/FAILED.
