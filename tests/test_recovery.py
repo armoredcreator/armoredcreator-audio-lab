@@ -140,6 +140,37 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
         self.assertEqual(self.pub.count, 1)
 
+    def test_absent_publication_rebuilds_from_original_even_with_durable_result(self):
+        vision = Vision()
+        studio = Studio(self.storage)
+        publisher = Publisher()
+        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher)
+
+        pipeline.run(self.item)
+        row = self.db.get(self.item)
+        self.assertEqual(row.state, State.PUBLISHED)
+
+        # Simulate a prior publication attempt whose Telegram message has no
+        # matching evidence. A durable result may still exist, but it is not
+        # trusted as a safe continuation point.
+        self.db.transition(self.item, State.RECOVERY, "test-publication-absent")
+        self.db.publication_started(self.item)
+        working = self.storage.working(self.item)
+        working.write_bytes(b"STALE-WORKING")
+        self.db.set_working(self.item, working)
+
+        studio.calls = 0
+        Recovery(
+            self.db, self.storage, vision, studio, publisher
+        ).reconcile(self.item)
+
+        row = self.db.get(self.item)
+        self.assertEqual(row.state, State.PUBLISHED)
+        self.assertEqual(studio.calls, 1)
+        self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
+        self.assertFalse(row.result_path.exists())
+        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
+
     def test_unknown_publication_never_resumes_durable_result(self):
         class AmbiguousPublisher(Publisher):
             def check_publication(self, item):
