@@ -240,6 +240,14 @@ class Database:
             tuple(json.loads(row["affiliate_urls_json"] or "[]")),
         )
 
+    def last_state_event(self, item_id: str):
+        row = self.conn.execute(
+            "SELECT old_state, new_state, reason, created_at "
+            "FROM state_events WHERE content_id=? ORDER BY id DESC LIMIT 1",
+            (str(item_id),),
+        ).fetchone()
+        return row
+
     def last_error(self, item_id: str) -> str | None:
         row = self.conn.execute(
             "SELECT last_error FROM items WHERE content_id=?", (str(item_id),)
