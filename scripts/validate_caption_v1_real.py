@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from pathlib import Path
+
+# This script lives under scripts/, so explicitly put the repository root
+# first on sys.path before importing the application packages.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from ArmoredVision.modules.v1.caption.generator import CaptionGenerator, CaptionGenerationError
 from ArmoredVision.modules.v1.shopee_api import ShopeeAffiliateAPI
@@ -13,7 +21,11 @@ def main() -> int:
         description="ArmoredCreator - smoke real da Caption V1 (sem Pipeline/Studio/Hub/Telegram)"
     )
     parser.add_argument("--url", required=True, help="URL Shopee do produto")
-    parser.add_argument("--require-gemini", action="store_true", help="falha se GEMINI_API_KEY não estiver configurada")
+    parser.add_argument(
+        "--require-gemini",
+        action="store_true",
+        help="falha se GEMINI_API_KEY não estiver configurada",
+    )
     args = parser.parse_args()
 
     os.environ["ARMORED_CAPTION_ENABLED"] = "1"
