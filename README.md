@@ -127,8 +127,10 @@ Arquivos: `ArmoredStudio/service.py`, `unified.py`, `analysis/*`, `processing/*`
 - Runtime RVC e voz `melody` foram usados em execução real.
 - CPU fallback funcionou.
 - Itens 1383 e 706 produziram áudio RVC e vídeo final.
+- Finalizer padroniza a saída para Story 1080×1920: escala proporcional + crop central para fontes não-9:16; sem stretch, padding ou blur no vídeo principal.
+- O `crop_final` da análise acontece antes da normalização Story.
 
-**Estado: FECHADO/CERTIFICADO.**
+**Estado: FECHADO; normalização Story coberta por teste de regressão.**
 
 ---
 
@@ -242,14 +244,14 @@ Um novo conteúdo LIVE não pode ser artificialmente injetado porque a fonte per
 
 ## 14. Congelamento
 
-O código atual está em condição de congelamento: não há correção funcional conhecida bloqueando a versão após os testes automatizados e os dois E2E reais de 27/09.
+O código está congelado novamente após a correção de normalização Story. A suíte automatizada local registrada anteriormente continua sendo a última execução completa; a nova correção deve ser validada localmente antes do CATCH-UP histórico.
 
-Commit funcional antes desta atualização do README:
+Base da versão congelada antes da correção Story:
 ```text
-aef0e471a4930bd92c8557ff472437fd1873821c
+a345f2fd997d841e1e38f8e4609ed4af7083dd30
 ```
 
-Após esta atualização, o commit criado para este README será a base da versão congelada do laboratório.
+Correção Story integrada na branch congelada pelo PR #29. O commit atual da branch é registrado pelo Git e deve ser usado no CATCH-UP após a validação local.
 
 Depois do congelamento:
 
@@ -283,7 +285,7 @@ Somente uma falha bloqueadora reproduzida no CATCH-UP pode justificar alteraçã
 | Caption Policy | ✅ fechado |
 | ArmoredStudio | ✅ fechado |
 | RVC | ✅ fechado |
-| FFmpeg / Finalizer | ✅ fechado |
+| FFmpeg / Finalizer | ✅ fechado + Story 9:16 |
 | ArmoredHub | ✅ fechado |
 | Telegram publication | ✅ fechado |
 | Confirmation | ✅ fechado |
