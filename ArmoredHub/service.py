@@ -514,6 +514,12 @@ class ArmoredHub:
             message = self._run_async(send())
         except (TimedOut, NetworkError) as exc:
             status = self.check_publication(item)
+            print(
+                f"[HUB][TELEGRAM][SEND_ERROR] item={item.content_id} "
+                f"exception={type(exc).__name__} message={exc!s!r} "
+                f"reconciliation={status.value} decision="
+                f"{'CONFIRMED' if status == PublicationCheck.CONFIRMED else 'UNKNOWN'}"
+            )
             if status == PublicationCheck.CONFIRMED:
                 publication = self._publication(item)
                 message_id = publication["published_message_id"] if publication else None
