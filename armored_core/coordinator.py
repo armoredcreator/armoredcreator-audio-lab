@@ -496,6 +496,18 @@ class Coordinator:
                 self.db.set_sync_mode("CATCH_UP")
             catch_up_processed = await self.run_catch_up_async()
 
+            # LIVE is legal only after the historical source has explicitly
+            # committed CATCH-UP completion. Any incomplete/blocked historical
+            # run must never fall through into LIVE.
+            if not self.db.historical_complete():
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
+                    "LIVE bloqueado. O processo permanecerá encerrado até a "
+                    "reconciliação/reexecução do candidato pendente."
+                )
+                return
+
             # A bounded CATCH-UP run remains opt-in certification behavior.
             # By default it terminates here, preserving the existing contract.
             # A second explicit certification flag may instead perform a safe
