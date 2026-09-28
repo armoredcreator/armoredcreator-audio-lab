@@ -23,6 +23,8 @@ INTRO_MUSIC_VOLUME = 2.5
 INTRO_DURATION = 2.0
 INTRO_WIDTH = 1080
 INTRO_HEIGHT = 1920
+STORY_WIDTH = 1080
+STORY_HEIGHT = 1920
 BLUR = "boxblur=6:2"
 FADE_IN = "fade=t=in:st=0:d=0.6:color=white"
 FADE_OUT = "fade=t=out:st=1.7:d=0.6:color=white"
@@ -88,6 +90,21 @@ def _plan_video_filters(plan: dict[str, Any] | None, *, audio=False):
     return filters
 
 
+def _story_normalization_filters(width: int, height: int) -> list[str]:
+    """Normaliza o vídeo principal para Story 9:16 sem deformar o conteúdo.
+
+    A imagem é ampliada proporcionalmente até cobrir 1080x1920 e somente o
+    excedente é cortado pelo centro. Assim, não há stretch nem padding/blur.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError("Dimensões do vídeo inválidas.")
+    return [
+        f"scale={STORY_WIDTH}:{STORY_HEIGHT}:force_original_aspect_ratio=increase",
+        f"crop={STORY_WIDTH}:{STORY_HEIGHT}:(iw-{STORY_WIDTH})/2:(ih-{STORY_HEIGHT})/2",
+        "setsar=1",
+    ]
+
+
 def _plan_dimensions(plan, width, height):
     crop = (plan or {}).get("crop_final")
     if crop:
@@ -97,7 +114,7 @@ def _plan_dimensions(plan, width, height):
 
 def criar_filtro(position, largura, altura, fps, plan=None):
     plan_video = _plan_video_filters(plan)
-    base_video = plan_video + [
+    base_video = plan_video + _story_normalization_filters(largura, altura) + [
         f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
         f"unsharp={UNSHARP}", "setpts=PTS-STARTPTS",
     ]
@@ -149,7 +166,7 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
             raise RuntimeError(f"Posição de intro inválida: {position}")
 
     largura, altura, fps = probe_video(video)
-    largura, altura = _plan_dimensions(plan, largura, altura)
+    largura, altura = STORY_WIDTH, STORY_HEIGHT
     saida.parent.mkdir(parents=True, exist_ok=True)
     if saida.exists():
         saida.unlink()
