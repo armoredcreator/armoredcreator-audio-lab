@@ -516,7 +516,7 @@ class ArmoredHub:
             status = self.check_publication(item)
             print(
                 f"[HUB][TELEGRAM][SEND_ERROR] item={item.content_id} "
-                f"exception={type(exc).__name__} message={exc!s!r} "
+                f"exception={type(exc).__name__} message={str(exc)!r} "
                 f"reconciliation={status.value} decision="
                 f"{'CONFIRMED' if status == PublicationCheck.CONFIRMED else 'UNKNOWN'}"
             )
