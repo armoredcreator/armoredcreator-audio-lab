@@ -166,16 +166,17 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
             raise RuntimeError(f"Posição de intro inválida: {position}")
 
     largura, altura, fps = probe_video(video)
-    largura, altura = STORY_WIDTH, STORY_HEIGHT
+    largura, altura = _plan_dimensions(plan, largura, altura)
+    output_largura, output_altura = STORY_WIDTH, STORY_HEIGHT
     saida.parent.mkdir(parents=True, exist_ok=True)
     if saida.exists():
         saida.unlink()
 
     if intro:
-        filtro = criar_filtro(position, largura, altura, fps, plan)
+        filtro = criar_filtro(position, output_largura, output_altura, fps, plan)
         maps = ("[vout]", "[aout]")
     else:
-        vf = _plan_video_filters(plan) + [
+        vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [
             f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
             f"unsharp={UNSHARP}", "setpts=PTS-STARTPTS",
         ]
