@@ -56,10 +56,15 @@ class Recovery:
     def reconcile(self, item_id: str) -> None:
         item = self.db.get(item_id)
 
+        # Capture the failure evidence BEFORE Recovery writes its own
+        # startup-recovery state event. Otherwise the evidence would be lost.
+        last_event = self.db.last_state_event(item_id)
+
         # ShopeeProductNotFound/VisionUnresolved remains WAITING_VISION.
         if item.state == State.WAITING_VISION:
             self.db.transition(item_id, State.VISION, "recovery-retry-waiting-vision")
             item = self.db.get(item_id)
+            last_event = self.db.last_state_event(item_id)
 
         if item.state == State.PUBLISHED:
             self.pipeline.cleanup(item_id)
@@ -121,7 +126,6 @@ class Recovery:
         # A processing-stage exception is stronger evidence than the mere
         # presence of a result file. If Studio failed, any derived result in
         # the workspace may be partial/corrupt; rebuild from ORIGINAL.
-        last_event = self.db.last_state_event(item_id)
         if (
             last_event
             and last_event["old_state"] == State.STUDIO.value
