@@ -128,7 +128,7 @@ class ArmoredHub:
         if self._destination_chat_id:
             return self._destination_chat_id
 
-        topic_value = str(topic_id or (os.getenv("ARMORED_HUB_TOPIC_ID") or "228")).strip()
+        topic_value = str(topic_id or (os.getenv("ARMORED_HUB_TOPIC_ID") or "")).strip()
         if not topic_value or not topic_value.lstrip("-").isdigit():
             raise RuntimeError("ARMORED_HUB_TOPIC_ID inválido para descoberta automática")
 
