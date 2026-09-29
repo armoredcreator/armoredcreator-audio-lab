@@ -47,7 +47,7 @@ A revisão módulo a módulo identificou e corrigiu somente bloqueios comprovado
 - Migrações SQLite não removem mais tabelas históricas de evidência da Vision.
 - Valores reais de origem/grupo/tópico do ambiente não ficam mais como defaults no código ou em .env.example; a configuração operacional deve vir do ambiente/credentials/project.env.
 
-A suíte completa deve ser executada novamente antes de qualquer CATCH-UP histórico real.
+A suíte completa deve ser executada novamente antes de qualquer CATCH-UP histórico real. O CI da branch foi ajustado para executar pytest sobre toda a suíte e tratar RuntimeWarning como erro.
 
 ---
 
