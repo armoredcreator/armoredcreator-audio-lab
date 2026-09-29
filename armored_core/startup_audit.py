@@ -58,6 +58,23 @@ class StartupReconciler:
                 publication_check = None
 
             current = self.db.get(item_id)
+
+            # Older releases incorrectly classified Caption failures as
+            # WAITING_VISION. Migrate only unmistakable historical Caption
+            # evidence to RECOVERY so WAITING_VISION remains Vision-only.
+            legacy_error = str(self.db.last_error(item_id) or "")
+            legacy_caption = (
+                "Nenhuma das " in legacy_error
+                and "passou pela Policy" in legacy_error
+            ) or "Gemini não conseguiu gerar uma legenda válida" in legacy_error
+            if current.state == State.WAITING_VISION and legacy_caption:
+                self.db.transition(
+                    item_id,
+                    State.RECOVERY,
+                    "legacy-caption-waiting-vision-migrated-to-recovery",
+                )
+                current = self.db.get(item_id)
+
             if (
                 current.state == State.FAILED
                 and publication is not None
