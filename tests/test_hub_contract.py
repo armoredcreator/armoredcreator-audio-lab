@@ -125,10 +125,9 @@ class HubContractTests(unittest.TestCase):
                 hub = ArmoredHub(root, db)
 
                 calls = []
-                # Exercise the real candidate-reconciliation path. The
-                # async Telegram discovery itself is replaced at the boundary,
-                # but _find_telegram_publications must still re-verify the
-                # returned unscoped candidate by message ID.
+                # Exercise the real candidate-reconciliation path. Discovery
+                # is replaced at the async boundary, while the candidate is
+                # still re-verified by its Telegram message ID.
                 with patch.dict(
                     "os.environ",
                     {
@@ -151,17 +150,17 @@ class HubContractTests(unittest.TestCase):
                     self.assertEqual(calls, ["474"])
 
                     # check_publication consumes the already-verified candidate;
-                # it must not perform a second Telegram verification.
+                    # it must not perform a second Telegram verification.
                     hub._find_telegram_publications = lambda current: ["474"]
                     self.assertEqual(
                         hub.check_publication(item),
-                    PublicationCheck.CONFIRMED,
+                        PublicationCheck.CONFIRMED,
                     )
                     self.assertEqual(calls, ["474"])
                     self.assertEqual(
                         db.publication(item.item_id)["published_message_id"],
-                    "474",
-                )
+                        "474",
+                    )
             finally:
                 db.close()
 
