@@ -41,6 +41,17 @@ def main() -> int:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     coordinator = Coordinator.build(root=root)
+
+    required = ["ARMORED_CREATOR_BOT_TOKEN", "ARMORED_HUB_TOPIC_ID"]
+    if os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
+        required.append("GEMINI_API_KEY")
+    missing = [name for name in required if not (os.getenv(name) or "").strip()]
+    if missing:
+        raise RuntimeError(
+            "Configuração obrigatória ausente em credentials/project.env: "
+            + ", ".join(missing)
+        )
+
     try:
         logging.info("ArmoredCreator Coordinator iniciado")
         logging.info("Root: %s", root)
