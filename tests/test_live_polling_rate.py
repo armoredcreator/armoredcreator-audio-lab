@@ -50,7 +50,7 @@ class _Reader:
 
 
 class LivePollingRateTests(unittest.TestCase):
-    def test_live_polls_one_topic_per_cycle_in_round_robin(self, monkeypatch):
+    def test_live_polls_one_topic_per_cycle_in_round_robin(self):
         source = TelegramSource.__new__(TelegramSource)
         source.root = Path(".")
         source.reader = _Reader()
