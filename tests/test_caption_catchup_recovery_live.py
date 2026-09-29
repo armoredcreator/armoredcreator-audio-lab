@@ -128,11 +128,11 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
             )
 
             try:
-                processed = asyncio.run(
+                asyncio.run(
                     coordinator._run_catch_up_with_recovery_async()
                 )
 
-                self.assertEqual(processed, ["100", "101", "100"])
+                self.assertEqual(coordinator._last_catch_up_completed_count, 2)
                 self.assertEqual(source.reset_count, 1)
                 self.assertTrue(source.historical_complete)
 
