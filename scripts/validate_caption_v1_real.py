@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ArmoredVision.modules.v1.caption.generator import CaptionGenerator, CaptionGenerationError
+from ArmoredIA.service import ArmoredIA
+from ArmoredIA.caption.generator import CaptionGenerationError
 from ArmoredVision.modules.v1.shopee_api import ShopeeAffiliateAPI
 from ArmoredVision.modules.v1.shopee_resolver import resolve_short_url
 
@@ -28,7 +29,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    os.environ["ARMORED_CAPTION_ENABLED"] = "1"
+    os.environ["ARMORED_IA_ENABLED"] = "1"
+    os.environ["ARMORED_IA_CAPTION_ENABLED"] = "1"
 
     if args.require_gemini and not os.getenv("GEMINI_API_KEY"):
         raise SystemExit("ERRO: GEMINI_API_KEY não configurada no ambiente atual.")
@@ -44,12 +46,12 @@ def main() -> int:
     print(f"Item ID:      {resolved.item_id}")
     print(f"Produto V1:   {product.get('productName') or '-'}")
     print(f"Loja:         {product.get('shopName') or '-'}")
-    print(f"Modelo:       {os.getenv('ARMORED_CAPTION_MODEL', 'gemini-3.1-flash-lite')}")
+    print(f"Modelo:       {os.getenv('ARMORED_IA_MODEL', 'gemini-3.1-flash-lite')}")
     print("V2:           DESATIVADA / não utilizada")
     print()
 
     try:
-        caption = CaptionGenerator().generate(product)
+        caption = ArmoredIA().generate_caption(product)
     except CaptionGenerationError as exc:
         print("RESULTADO: FALHOU")
         print(f"MOTIVO: {exc}")
