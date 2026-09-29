@@ -60,10 +60,16 @@ def _brand_model_tokens(context: dict[str, Any] | None) -> set[str]:
     if not context:
         return set()
     leaked: set[str] = set()
-    for key in ("brand", "brandName", "model", "modelName"):
+    for key in ("brand", "brandName"):
         value = context.get(key)
         if value:
             leaked.update(_tokens(str(value)))
+    for key in ("model", "modelName"):
+        value = context.get(key)
+        if value:
+            for token in re.findall(r"[a-z0-9]+", _fold(str(value))):
+                if len(token) >= 2:
+                    leaked.add(token)
     return leaked
 
 
