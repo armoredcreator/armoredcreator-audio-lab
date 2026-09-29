@@ -405,9 +405,10 @@ class EndToEndRecoveryTests(unittest.TestCase):
 
             processed = __import__("asyncio").run(coordinator.run_catch_up_async())
 
-            self.assertEqual(processed, [str(item_id)])
-            self.assertEqual(catch_up_source.calls, 1)
+            self.assertEqual(processed, [str(item_id), "e2e-503"])
+            self.assertEqual(catch_up_source.calls, 3)
             self.assertEqual(coordinator.db.get(item_id).state, State.RECOVERY)
+            self.assertEqual(coordinator.db.get("e2e-503").state, State.RECOVERY)
             coordinator.close()
 
 
