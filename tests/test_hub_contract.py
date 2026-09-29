@@ -134,6 +134,14 @@ class HubContractTests(unittest.TestCase):
                     lambda message_id, current: calls.append(message_id) or True
                 )
 
+                candidates = hub._find_telegram_publications(item)
+
+                self.assertEqual(candidates, ["474"])
+                self.assertEqual(calls, ["474"])
+
+                # check_publication consumes the already-verified candidate;
+                # it must not perform a second Telegram verification.
+                hub._find_telegram_publications = lambda current: ["474"]
                 self.assertEqual(
                     hub.check_publication(item),
                     PublicationCheck.CONFIRMED,
