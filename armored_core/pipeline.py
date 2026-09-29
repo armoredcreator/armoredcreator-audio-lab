@@ -1,18 +1,19 @@
 from __future__ import annotations
 from pathlib import Path
 import logging
+import os
 import shutil
 from .database import Database
 from .models import PublicationCheck, State
-from .services import Publisher, StudioService, VisionService, VisionUnresolvedError, PublicationUnknownError
+from .services import AIService, Publisher, StudioService, VisionService, VisionUnresolvedError, PublicationUnknownError
 from .storage import Storage
 from .trace import PipelineTrace
 
 
 class Pipeline:
-    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher):
+    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher, ia: AIService | None = None):
         self.db, self.storage = db, storage
-        self.vision, self.studio, self.publisher = vision, studio, publisher
+        self.vision, self.studio, self.publisher, self.ia = vision, studio, publisher, ia
         self.log = logging.getLogger(__name__)
         self.trace = PipelineTrace(storage.root)
         self._shutdown_checker = lambda: False
@@ -80,7 +81,8 @@ class Pipeline:
                         v.affiliate_name,
                         v.affiliate_url,
                         affiliate_urls=getattr(v, "affiliate_urls", ()),
-                        publication_caption=getattr(v, "publication_caption", None),
+                        publication_caption=None,
+                        ia_context=getattr(v, "ia_context", None),
                     )
                     self.trace.emit(
                         item_id,
@@ -90,8 +92,28 @@ class Pipeline:
                         caption=bool(getattr(v, "publication_caption", None)),
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
-                self.db.transition(item_id, State.STUDIO, "vision-complete")
-                self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
+                if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
+                    self.db.transition(item_id, State.IA, "vision-complete")
+                    self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
+                else:
+                    self.db.transition(item_id, State.STUDIO, "vision-complete")
+                    self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
+
+            item = self.db.get(item_id)
+            if item.state == State.IA:
+                self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)
+                if self.ia is None:
+                    raise RuntimeError("armored-ia-service-not-configured")
+                if not item.ia_context:
+                    raise RuntimeError("armored-ia-context-missing")
+                with self.trace.stage(item_id, "IA"):
+                    caption = self.ia.generate_caption(dict(item.ia_context))
+                    if not str(caption or "").strip():
+                        raise RuntimeError("armored-ia-empty-caption")
+                    self.db.set_caption(item_id, str(caption))
+                    self.trace.emit(item_id, "IA", "RESULT", caption=True)
+                self.db.transition(item_id, State.STUDIO, "ia-complete")
+                self.trace.emit(item_id, "IA", "TRANSITION", old_state=State.IA.value, new_state=State.STUDIO.value, reason="ia-complete")
 
             item = self.db.get(item_id)
             if item.state == State.STUDIO:
