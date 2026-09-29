@@ -245,5 +245,151 @@ class IncrementalCoordinatorTests(unittest.TestCase):
                 coordinator.close()
 
 
+
+    def test_catch_up_continues_after_technical_recovery_failure(self):
+        class RecoveryThenSuccessSource:
+            def __init__(self, db):
+                self.db = db
+                self.calls = 0
+                self.completed = False
+                self.checkpoints = []
+
+            async def fetch_next_async(self):
+                self.calls += 1
+                if self.calls == 1:
+                    async def materialize(target):
+                        target.write_bytes(b"RECOVERY-FIRST")
+                    return SimpleNamespace(
+                        telegram_message_id="903",
+                        source_id="telegram",
+                        topic_id=101,
+                        topic_name="Recovery",
+                        original_url="https://shopee.com.br/example/903",
+                        source_path=None,
+                        materialize=materialize,
+                    )
+                if self.calls == 2:
+                    async def materialize(target):
+                        target.write_bytes(b"SUCCESS-SECOND")
+                    return SimpleNamespace(
+                        telegram_message_id="904",
+                        source_id="telegram",
+                        topic_id=101,
+                        topic_name="Recovery",
+                        original_url="https://shopee.com.br/example/904",
+                        source_path=None,
+                        materialize=materialize,
+                    )
+                return None
+
+            def mark_ingested(self, _message_id):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def commit_live_checkpoints(self, checkpoints):
+                self.checkpoints.append(dict(checkpoints))
+
+            def complete_historical_sync(self):
+                self.completed = True
+                self.db.complete_historical_sync()
+
+        class FailureCoordinator(Coordinator):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.run_calls = []
+
+            def run(self, item_id: str) -> None:
+                self.run_calls.append(str(item_id))
+                if str(item_id) == "903":
+                    self.db.transition(
+                        item_id,
+                        State.RECOVERY,
+                        "CaptionTransportError: Gemini indisponível",
+                    )
+                    raise RuntimeError("Caption Gemini indisponível")
+                self.db.transition(item_id, State.PUBLISHED, "test-published")
+                self.db.mark_cleanup_completed(item_id)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            source = RecoveryThenSuccessSource(db)
+            coordinator = FailureCoordinator(
+                db, storage, Vision(), Studio(storage), Publisher(), source
+            )
+
+            try:
+                processed = coordinator.run_catch_up()
+                self.assertEqual(processed, ["903", "904"])
+                self.assertEqual(source.calls, 3)
+                self.assertEqual(coordinator.run_calls, ["903", "904"])
+                self.assertEqual(db.get("903").state, State.RECOVERY)
+                self.assertEqual(db.get("904").state, State.PUBLISHED)
+                self.assertTrue(db.get("904").cleanup_completed)
+                self.assertFalse(db.historical_complete())
+                self.assertEqual(source.checkpoints, [])
+            finally:
+                coordinator.close()
+
+    def test_rediscovered_completed_candidate_can_advance_checkpoint(self):
+        class CompletedSource:
+            def __init__(self, db):
+                self.db = db
+                self.calls = 0
+                self.checkpoints = []
+
+            async def fetch_next_async(self):
+                self.calls += 1
+                if self.calls == 1:
+                    async def materialize(target):
+                        target.write_bytes(b"ALREADY-DONE")
+                    return SimpleNamespace(
+                        telegram_message_id="905",
+                        source_id="telegram",
+                        topic_id=102,
+                        topic_name="Checkpoint",
+                        original_url="https://shopee.com.br/example/905",
+                        source_path=None,
+                        materialize=materialize,
+                    )
+                return None
+
+            def mark_ingested(self, _message_id):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            def commit_live_checkpoints(self, checkpoints):
+                self.checkpoints.append(dict(checkpoints))
+
+            def complete_historical_sync(self):
+                self.db.complete_historical_sync()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            source = CompletedSource(db)
+            coordinator = Coordinator(db, storage, Vision(), Studio(storage), Publisher(), source)
+            item_id = coordinator.ingest_once()
+            db.transition(item_id, State.VISION, "test")
+            db.transition(item_id, State.STUDIO, "test")
+            db.transition(item_id, State.PUBLISHING, "test")
+            db.transition(item_id, State.PUBLISHED, "test")
+            db.mark_cleanup_completed(item_id)
+
+            try:
+                processed = coordinator.run_catch_up()
+                self.assertEqual(processed, [])
+                self.assertEqual(source.checkpoints, [{102: 905}])
+                self.assertTrue(db.historical_complete())
+            finally:
+                coordinator.close()
+
+
 if __name__ == "__main__":
     unittest.main()
