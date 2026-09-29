@@ -163,6 +163,12 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertIn("combinar diretamente com o produto específico", prompt_text)
         self.assertIn("Não copie o título completo", prompt_text)
         self.assertIn("As hashtags devem ser específicas", prompt_text)
+        generation_config = captured["json"]["generationConfig"]
+        self.assertEqual(generation_config["responseMimeType"], "application/json")
+        self.assertEqual(
+            generation_config["responseSchema"]["properties"]["captions"]["maxItems"],
+            10,
+        )
         self.assertEqual(captured["timeout"], 90)
     def test_generator_selects_first_policy_valid_candidate_from_single_response(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
