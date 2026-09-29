@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -7,6 +8,18 @@ import requests
 
 from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError, CaptionGenerator, CaptionTransportError
 from ArmoredVision.modules.v1.caption.policy import CaptionPolicyError, validate_caption
+
+
+def _gemini_response(captions):
+    return {
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "text": json.dumps({"captions": captions}, ensure_ascii=False)
+                }]
+            }
+        }]
+    }
 
 
 class CaptionPolicyTests(unittest.TestCase):
@@ -112,7 +125,9 @@ class CaptionPolicyTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {"captions": ["Cantinho profissional ✨\n#barbearia #organizacao"]}
+                return _gemini_response([
+                    "Cantinho profissional ✨\n#barbearia #organizacao"
+                ])
 
         def requester(*args, **kwargs):
             captured["json"] = kwargs["json"]
@@ -162,13 +177,11 @@ class CaptionPolicyTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {
-                    "captions": [
-                        "Compre agora 🔥\\n#oferta #promo",
-                        "Batom matte ✨\\n#beleza",
-                        "Olha esse charme ✨\\n#beleza",
-                    ]
-                }
+                return _gemini_response([
+                    "Compre agora 🔥\n#oferta #promo",
+                    "Batom matte ✨\n#beleza",
+                    "Olha esse charme ✨\n#beleza",
+                ])
 
         def requester(*args, **kwargs):
             calls["count"] += 1
@@ -195,12 +208,10 @@ class CaptionPolicyTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {
-                    "captions": [
-                        "Compre agora 🔥\\n#oferta #promo",
-                        "Garanta já ✨\\n#beleza",
-                    ]
-                }
+                return _gemini_response([
+                    "Compre agora 🔥\n#oferta #promo",
+                    "Garanta já ✨\n#beleza",
+                ])
 
         def requester(*args, **kwargs):
             calls["count"] += 1
@@ -228,12 +239,10 @@ class CaptionPolicyTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {
-                    "captions": [
-                        "Compre agora 🔥\n#oferta #promo",
-                        "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao",
-                    ]
-                }
+                return _gemini_response([
+                    "Compre agora 🔥\n#oferta #promo",
+                    "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao",
+                ])
 
         def requester(*args, **kwargs):
             calls["count"] += 1
