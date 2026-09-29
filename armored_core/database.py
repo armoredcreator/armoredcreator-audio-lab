@@ -81,8 +81,8 @@ class Database:
         self._migrate_columns()
 
     def _migrate_columns(self) -> None:
-        # Remove artefato legado da Vision V2.
-        self.conn.execute("DROP TABLE IF EXISTS vision_candidates")
+        # Legacy Vision evidence tables, when present in an existing database,
+        # are preserved. Migrations must never destroy historical audit data.
         migrations = {
             "items": [
                 ("source_id", "ALTER TABLE items ADD COLUMN source_id TEXT NOT NULL DEFAULT 'telegram'"),
