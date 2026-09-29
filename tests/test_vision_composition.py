@@ -4,7 +4,6 @@ import os
 import unittest
 
 from ArmoredVision.service import ArmoredVision
-from ArmoredVision.modules.v1.caption.generator import CaptionTransportError
 
 
 PRODUCT = {
@@ -66,13 +65,11 @@ def test_v1_contract_remains_usable_when_caption_is_disabled(monkeypatch):
 
 
 def test_caption_is_composed_after_v1_without_changing_v1(monkeypatch):
-    monkeypatch.setenv("ARMORED_CAPTION_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
 
     api = V1FakeAPI()
-    vision = ArmoredVision(
-        api=api,
-        caption_generator=FakeCaption(),
-    )
+    vision = ArmoredVision(api=api)
 
     result = vision.identify(
         type(
@@ -85,56 +82,16 @@ def test_caption_is_composed_after_v1_without_changing_v1(monkeypatch):
     assert result.affiliate_name == "Produto Exemplo 1L"
     assert result.affiliate_url == "https://s.shopee.com.br/original"
     assert result.affiliate_urls == ("https://s.shopee.com.br/original",)
-    assert result.publication_caption == "Olha esse charme ✨\n#casa"
+    assert result.publication_caption is None
+    assert result.ia_context["productName"] == "Produto Exemplo 1L"
     assert api.exact_calls == [("456", "123")]
 
 
 class VisionCompositionTests(unittest.TestCase):
     def tearDown(self):
-        os.environ.pop("ARMORED_CAPTION_ENABLED", None)
+        os.environ.pop("ARMORED_IA_ENABLED", None)
+        os.environ.pop("ARMORED_IA_CAPTION_ENABLED", None)
 
-
-    def test_caption_transport_exhaustion_maps_to_technical_recovery(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-
-        class TransportFailingCaption:
-            def generate(self, product):
-                raise CaptionTransportError("Gemini indisponível após retries")
-
-        vision = ArmoredVision(
-            api=V1FakeAPI(),
-            caption_generator=TransportFailingCaption(),
-        )
-
-        with self.assertRaises(RuntimeError) as ctx:
-            vision.identify(
-                type(
-                    "ItemStub",
-                    (),
-                    {"original_url": "https://shopee.com.br/product/456/123"},
-                )()
-            )
-
-        self.assertIn("Caption Gemini indisponível", str(ctx.exception))
-
-    def test_caption_runtime_failure_maps_to_waiting_vision(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-
-        vision = ArmoredVision(
-            api=V1FakeAPI(),
-            caption_generator=FailingCaption(),
-        )
-
-        with self.assertRaises(RuntimeError) as ctx:
-            vision.identify(
-                type(
-                    "ItemStub",
-                    (),
-                    {"original_url": "https://shopee.com.br/product/456/123"},
-                )()
-            )
-
-        self.assertIn("gemini-temporarily-unavailable", str(ctx.exception))
 
 
 if __name__ == "__main__":
