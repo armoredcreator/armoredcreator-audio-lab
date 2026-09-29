@@ -20,6 +20,7 @@ LEGACY_STORAGE_DIRS = {
 PRODUCTION_DIRS = (
     ROOT / "ArmoredSync",
     ROOT / "ArmoredVision",
+    ROOT / "ArmoredIA",
     ROOT / "ArmoredStudio",
     ROOT / "ArmoredHub",
     ROOT / "armored_core",
@@ -100,3 +101,9 @@ def test_vision_v2_is_frozen_out_of_active_v1_service():
     assert "CandidateDiscovery" not in service
     assert "VisionCandidateError" not in service
     assert "ARMORED_VISION_V2_ENABLED" not in service
+
+
+def test_armored_ia_is_the_only_caption_runtime_boundary():
+    assert (ROOT / "ArmoredIA" / "service.py").is_file()
+    assert not (ROOT / "ArmoredVision" / "modules" / "caption").exists()
+    assert not (ROOT / "ArmoredVision" / "modules" / "v1" / "caption").exists()
