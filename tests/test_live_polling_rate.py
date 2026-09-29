@@ -60,7 +60,7 @@ class LivePollingRateTests(unittest.TestCase):
 
         monkeypatch.setenv("ARMORED_SYNC_SOURCE", "123456")
 
-    async def scenario():
+        async def scenario():
             first, _ = await source.fetch_live_candidate_async()
             self.assertIsNone(first)
             second, checkpoints = await source.fetch_live_candidate_async()
