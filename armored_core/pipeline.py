@@ -124,7 +124,6 @@ class Pipeline:
                 if not item.result_path or not item.result_path.is_file():
                     raise FileNotFoundError("publication-result-missing")
 
-                self.db.publication_started(item_id)
                 with self.trace.stage(item_id, "HUB"):
                     publish_once = getattr(self.publisher, "publish_once", None)
                     if callable(publish_once):
@@ -142,6 +141,7 @@ class Pipeline:
                         self.db.publication_confirmed(item_id, str(result.message_id))
                         self.trace.emit(item_id, "TELEGRAM", "CONFIRMED", message_id=str(result.message_id))
                     else:
+                        self.db.publication_started(item_id)
                         check = self.publisher.check_publication(item)
                         self.trace.emit(item_id, "HUB", "CHECK", result=check.value)
                         if check == PublicationCheck.UNKNOWN:
