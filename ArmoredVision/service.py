@@ -14,9 +14,8 @@ class ArmoredVision:
     armored_core and no JSON state from the legacy Vision is used.
     """
 
-    def __init__(self, api=None, caption_generator=None):
+    def __init__(self, api=None):
         self.api = api
-        self.caption_generator = caption_generator
 
     @staticmethod
     def _ia_context(product: dict) -> dict:
@@ -63,7 +62,8 @@ class ArmoredVision:
             identifier,
             affiliate_url,
             affiliate_urls=(affiliate_url,),
-            publication_caption=publication_caption,
+            publication_caption=None,
+            ia_context=self._ia_context(product),
         )
 
 
