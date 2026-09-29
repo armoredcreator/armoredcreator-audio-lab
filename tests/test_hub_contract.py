@@ -110,7 +110,7 @@ class HubContractTests(unittest.TestCase):
                         topic_scoped=False,
                         allow_unknown_topic=True,
                     )
-                )
+                    )
             finally:
                 db.close()
 
@@ -129,26 +129,37 @@ class HubContractTests(unittest.TestCase):
                 # async Telegram discovery itself is replaced at the boundary,
                 # but _find_telegram_publications must still re-verify the
                 # returned unscoped candidate by message ID.
-                hub._run_async = lambda coroutine: ["474"]
-                hub._verify_telegram_message = (
-                    lambda message_id, current: calls.append(message_id) or True
-                )
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "TELEGRAM_API_ID": "12345",
+                        "TELEGRAM_API_HASH": "test-hash",
+                        "ARMORED_HUB_TOPIC_ID": "228",
+                    },
+                    clear=False,
+                ), patch.object(
+                    hub, "_resolve_destination_chat_id", return_value="-100123"
+                ):
+                    hub._run_async = lambda coroutine: ["474"]
+                    hub._verify_telegram_message = (
+                        lambda message_id, current: calls.append(message_id) or True
+                    )
 
-                candidates = hub._find_telegram_publications(item)
+                    candidates = hub._find_telegram_publications(item)
 
-                self.assertEqual(candidates, ["474"])
-                self.assertEqual(calls, ["474"])
+                    self.assertEqual(candidates, ["474"])
+                    self.assertEqual(calls, ["474"])
 
-                # check_publication consumes the already-verified candidate;
+                    # check_publication consumes the already-verified candidate;
                 # it must not perform a second Telegram verification.
-                hub._find_telegram_publications = lambda current: ["474"]
-                self.assertEqual(
-                    hub.check_publication(item),
+                    hub._find_telegram_publications = lambda current: ["474"]
+                    self.assertEqual(
+                        hub.check_publication(item),
                     PublicationCheck.CONFIRMED,
-                )
-                self.assertEqual(calls, ["474"])
-                self.assertEqual(
-                    db.publication(item.item_id)["published_message_id"],
+                    )
+                    self.assertEqual(calls, ["474"])
+                    self.assertEqual(
+                        db.publication(item.item_id)["published_message_id"],
                     "474",
                 )
             finally:
