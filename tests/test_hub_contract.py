@@ -7,6 +7,7 @@ from pathlib import Path
 from ArmoredHub.service import ArmoredHub
 from armored_core.database import Database
 from armored_core.models import PublicationCheck
+from armored_core.services import PublicationUnknownError
 from armored_core.storage import Storage
 
 
@@ -140,7 +141,11 @@ class HubContractTests(unittest.TestCase):
                 ), patch.object(
                     hub, "_resolve_destination_chat_id", return_value="-100123"
                 ):
-                    hub._run_async = lambda coroutine: ["474"]
+                    def run_sync_without_leaking(coroutine):
+                        coroutine.close()
+                        return ["474"]
+
+                    hub._run_async = run_sync_without_leaking
                     hub._verify_telegram_message = (
                         lambda message_id, current: calls.append(message_id) or True
                     )
@@ -162,6 +167,48 @@ class HubContractTests(unittest.TestCase):
                         db.publication(item.item_id)["published_message_id"],
                         "474",
                     )
+            finally:
+                db.close()
+
+    def test_sent_unverified_without_evidence_stays_unknown_and_never_republishes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                db.publication_started(item.item_id)
+                db.publication_send_started(item.item_id)
+                hub = ArmoredHub(root, db)
+                hub._find_telegram_publications = lambda current: []
+
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "ARMORED_TELEGRAM_VERIFY_ATTEMPTS": "1",
+                        "ARMORED_TELEGRAM_VERIFY_RETRY_DELAY": "0",
+                    },
+                    clear=False,
+                ):
+                    self.assertEqual(
+                        hub.check_publication(item),
+                        PublicationCheck.UNKNOWN,
+                    )
+
+                    calls = {"publish": 0}
+
+                    def forbidden_publish(current):
+                        calls["publish"] += 1
+                        raise AssertionError("UNKNOWN publication must never be republished")
+
+                    hub.publish = forbidden_publish
+                    with self.assertRaises(PublicationUnknownError):
+                        hub.publish_once(item)
+
+                    self.assertEqual(calls["publish"], 0)
+                    row = db.publication(item.item_id)
+                    self.assertEqual(row["verification_status"], "SENT_UNVERIFIED")
+                    self.assertEqual(row["confirmed"], 0)
             finally:
                 db.close()
 
