@@ -196,6 +196,17 @@ A lista pode ter até 10 opções. Não inclua explicações, markdown ou campos
                         "generationConfig": {
                             "maxOutputTokens": 400,
                             "responseMimeType": "application/json",
+                            "responseSchema": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "captions": {
+                                        "type": "ARRAY",
+                                        "items": {"type": "STRING"},
+                                        "maxItems": 10,
+                                    }
+                                },
+                                "required": ["captions"],
+                            },
                         },
                     },
                     timeout=int(os.getenv("ARMORED_CAPTION_API_TIMEOUT", "90")),
