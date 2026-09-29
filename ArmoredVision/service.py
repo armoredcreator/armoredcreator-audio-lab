@@ -58,11 +58,12 @@ class ArmoredVision:
                 # failure. Let Pipeline persist it as RECOVERY rather than
                 # misclassifying it as Vision product resolution failure.
                 raise RuntimeError(f"Caption Gemini indisponível: {exc}") from exc
-            except CaptionGenerationError as exc:
-                # A valid Gemini response whose candidates all fail the local
-                # Policy is a Vision/Caption functional boundary, not a
-                # transport outage.
-                raise VisionUnresolvedError(str(exc)) from exc
+            except CaptionGenerationError:
+                # Gemini returned candidates, but none passed local Policy.
+                # This is a processing failure, not product-resolution
+                # uncertainty. Let Pipeline persist RECOVERY so the same item
+                # can be retried after the historical scan.
+                raise
             except Exception:
                 # Unexpected programming/configuration failures are technical
                 # pipeline failures. Do not misclassify them as WAITING_VISION.
