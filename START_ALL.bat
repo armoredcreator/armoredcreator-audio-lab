@@ -36,8 +36,8 @@ if not exist "%ARMORED_ROOT%credentials\project.env" (
     exit /b 1
 )
 
-for /f "tokens=1,* delims==" %%A in ('findstr /b "TELEGRAM_API_ID=" "%ARMORED_ROOT%credentials\project.env"') do set "TELEGRAM_API_ID=%%B"
-for /f "tokens=1,* delims==" %%A in ('findstr /b "TELEGRAM_API_HASH=" "%ARMORED_ROOT%credentials\project.env"') do set "TELEGRAM_API_HASH=%%B"
+for /f "delims=" %%A in ('powershell -NoProfile -Command "$v=Get-Content -LiteralPath '%ARMORED_ROOT%credentials\\project.env' | ForEach-Object { $_ -replace '^\\uFEFF','' } | Where-Object { $_ -match '^TELEGRAM_API_ID=' } | Select-Object -First 1; if($v){$v -replace '^TELEGRAM_API_ID=',''}"') do set "TELEGRAM_API_ID=%%A"
+for /f "delims=" %%A in ('powershell -NoProfile -Command "$v=Get-Content -LiteralPath '%ARMORED_ROOT%credentials\\project.env' | ForEach-Object { $_ -replace '^\\uFEFF','' } | Where-Object { $_ -match '^TELEGRAM_API_HASH=' } | Select-Object -First 1; if($v){$v -replace '^TELEGRAM_API_HASH=',''}"') do set "TELEGRAM_API_HASH=%%A"
 
 if not defined TELEGRAM_API_ID (
     echo ERRO: TELEGRAM_API_ID nao encontrado em credentials\project.env
