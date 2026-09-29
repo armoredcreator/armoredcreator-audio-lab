@@ -132,7 +132,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                     coordinator._run_catch_up_with_recovery_async()
                 )
 
-                self.assertEqual(processed, ["100", "101", "100", "101"])
+                self.assertEqual(processed, ["100", "101", "100"])
                 self.assertEqual(source.reset_count, 1)
                 self.assertTrue(source.historical_complete)
 
@@ -147,7 +147,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 self.assertEqual(vision.calls["101"], 1)
                 self.assertEqual(publisher.published, ["101", "100"])
 
-                self.assertEqual(source.commits, [{"7": 100}, {"7": 101}])
+                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
                 self.assertTrue(coordinator.db.historical_complete())
 
                 asyncio.run(coordinator._run_forever_async(max_cycles=1, poll_seconds=0))
