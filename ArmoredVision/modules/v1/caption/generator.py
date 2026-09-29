@@ -109,7 +109,7 @@ class CaptionGenerator:
 
         api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
         if not api_key:
-            raise CaptionGenerationError("GEMINI_API_KEY ausente; legenda Gemini obrigatória")
+            raise CaptionTransportError("GEMINI_API_KEY ausente; legenda Gemini obrigatória")
 
         model = os.getenv("ARMORED_CAPTION_MODEL", "gemini-3.1-flash-lite")
         prompt = """
@@ -213,16 +213,12 @@ A lista pode ter até 10 opções. Não inclua explicações, markdown ou campos
                 )
                 response.raise_for_status()
             except requests.RequestException as exc:
-                if not self._is_retryable_request_error(exc):
-                    raise CaptionGenerationError(
-                        f"Gemini recusou a solicitação: {exc}"
-                    ) from exc
                 last_transport_error = exc
-                if attempt < attempts:
+                if self._is_retryable_request_error(exc) and attempt < attempts:
                     time.sleep(retry_delay)
                     continue
                 raise CaptionTransportError(
-                    f"Gemini indisponível após {attempts} tentativa(s): {exc}"
+                    f"Gemini indisponível após {attempt} tentativa(s): {exc}"
                 ) from exc
 
             try:
