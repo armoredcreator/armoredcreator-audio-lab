@@ -558,7 +558,14 @@ class ArmoredHub:
                 write_timeout=float(os.getenv("ARMORED_TELEGRAM_WRITE_TIMEOUT", "180")),
                 pool_timeout=float(os.getenv("ARMORED_TELEGRAM_POOL_TIMEOUT", "15")),
             )
-            bot = Bot(token=token, request=request)
+            bot_api_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_URL") or "").strip()
+            bot_api_file_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_FILE_URL") or "").strip()
+            bot_kwargs = {"request": request}
+            if bot_api_url:
+                bot_kwargs["base_url"] = bot_api_url
+            if bot_api_file_url:
+                bot_kwargs["base_file_url"] = bot_api_file_url
+            bot = Bot(token=token, **bot_kwargs)
             try:
                 with output.open("rb") as handle:
                     return await bot.send_video(
