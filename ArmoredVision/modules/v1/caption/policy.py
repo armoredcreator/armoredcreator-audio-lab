@@ -142,8 +142,16 @@ def validate_caption(
         if _fold(sales_word) in folded:
             raise CaptionPolicyError(f"linguagem comercial proibida: {sales_word}")
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    main_lines = [line for line in lines if "#" not in line]
+    # Gemini may return hashtags on the same line or on a separate line.
+    # Hashtag placement is presentation, not a policy rule. Remove the
+    # validated hashtags first, then validate the remaining text as exactly
+    # one main line.
+    main_text = HASHTAG_RE.sub("", text)
+    main_lines = [
+        re.sub(r"\\s+", " ", line).strip()
+        for line in main_text.splitlines()
+        if line.strip()
+    ]
     if len(main_lines) != 1:
         raise CaptionPolicyError("texto principal deve ocupar uma única linha")
 
