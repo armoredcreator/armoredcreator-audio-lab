@@ -52,7 +52,7 @@ class PipelineTrace:
             if key not in {"ts", "item_id", "stage", "event"}
         )
         suffix = f" | {detail_text}" if detail_text else ""
-        self.log.info(
+        self.log.debug(
             "[TRACE][ITEM %s] %-10s %-14s%s",
             item_id,
             stage,
