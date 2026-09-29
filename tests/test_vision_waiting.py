@@ -168,10 +168,13 @@ class VisionWaitingTests(unittest.TestCase):
             try:
                 with patch("ArmoredVision.service.resolve_short_url", return_value=resolved), \
                      patch.dict("os.environ", {"ARMORED_CAPTION_ENABLED": "1"}, clear=False):
-                    with self.assertRaisesRegex(Exception, "Nenhuma das 10 candidata"):
+                    from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError
+                    with self.assertRaisesRegex(CaptionGenerationError, "Nenhuma das 10 candidata"):
                         Pipeline(db, storage, vision, studio, publisher).run(item_id)
                 self.assertEqual(db.get(item_id).state, State.RECOVERY)
-                self.assertIn("CaptionGenerationError", db.last_error(item_id) or "")
+                event = db.last_state_event(item_id)
+                self.assertEqual(event["new_state"], State.RECOVERY.value)
+                self.assertIn("CaptionGenerationError", event["reason"])
                 self.assertEqual(studio.calls, 0)
                 self.assertEqual(publisher.calls, 0)
                 self.assertTrue(db.get(item_id).original_path.is_file())
