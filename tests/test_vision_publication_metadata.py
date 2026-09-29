@@ -26,15 +26,14 @@ class VisionPublicationMetadataTests(unittest.TestCase):
                     affiliate_urls=(
                         "https://s.shopee.com.br/original",
                     ),
-                    publication_caption="Olha esse charme ✨\n#casa",
+                    publication_caption=None,
+                    ia_context={"productName": "Produto A", "category": "casa"},
                 )
 
                 item = db.get(item_id)
 
-                self.assertEqual(
-                    item.publication_caption,
-                    "Olha esse charme ✨\n#casa",
-                )
+                self.assertIsNone(item.publication_caption)
+                self.assertEqual(item.ia_context["productName"], "Produto A")
                 self.assertEqual(
                     item.affiliate_urls,
                     ("https://s.shopee.com.br/original",),
