@@ -11,7 +11,8 @@ from armored_core.database import Database
 from armored_core.models import State
 from armored_core.services import PublicationResult, StudioResult, VisionResult
 from armored_core.storage import Storage
-from ArmoredVision.modules.v1.caption.generator import CaptionGenerator, CaptionTransportError
+from ArmoredIA.caption.generator import CaptionGenerator, CaptionGenerationError
+from ArmoredIA.providers.gemini import GeminiProvider
 from ArmoredVision.service import ArmoredVision
 
 
@@ -300,43 +301,53 @@ class AuditRegressionTests(unittest.TestCase):
             finally:
                 reopened.close()
 
-    def test_caption_unexpected_runtime_error_is_not_waiting_vision(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        try:
-            class FailingCaption:
-                def generate(self, product):
-                    raise RuntimeError("unexpected-programming-error")
+    def test_ia_unexpected_runtime_error_is_recovery(self):
+        class FailingIA:
+            def generate_caption(self, context):
+                raise RuntimeError("unexpected-programming-error")
 
-            vision = ArmoredVision(
-                api=type("API", (), {
-                    "get_exact_product": lambda self, shop_id, item_id: {
-                        "productName": "Produto"
-                    },
-                    "affiliate_link_for_product": lambda self, product: "https://example.invalid/a",
-                })(),
-                caption_generator=FailingCaption(),
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            original = storage.original("ia-runtime", ".mp4", original_url="https://shopee.example/product")
+            original.write_bytes(b"original")
+            item_id = db.create_item(
+                "ia-runtime",
+                original,
+                original_url="https://shopee.example/product",
             )
-            with self.assertRaises(RuntimeError):
-                vision.identify(
-                    type("Item", (), {
-                        "original_url": "https://shopee.com.br/product/1/2"
-                    })()
-                )
-        finally:
-            os.environ.pop("ARMORED_CAPTION_ENABLED", None)
+            try:
+                class VisionResolved:
+                    def identify(self, item):
+                        return VisionResult(
+                            "Produto",
+                            "https://example.invalid/a",
+                            ia_context={"productName": "Produto"},
+                        )
 
-    def test_caption_missing_key_is_transport_error(self):
-        old = os.environ.pop("GEMINI_API_KEY", None)
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        try:
-            with self.assertRaises(CaptionTransportError):
-                CaptionGenerator(requester=lambda *args, **kwargs: None).generate({
-                    "productName": "Produto"
-                })
-        finally:
-            os.environ.pop("ARMORED_CAPTION_ENABLED", None)
-            if old is not None:
-                os.environ["GEMINI_API_KEY"] = old
+                with self.assertRaisesRegex(RuntimeError, "unexpected-programming-error"):
+                    from armored_core.pipeline import Pipeline
+                    Pipeline(
+                        db,
+                        storage,
+                        VisionResolved(),
+                        _Studio(storage),
+                        _Publisher(),
+                        FailingIA(),
+                    ).run(item_id)
+
+                self.assertEqual(db.get(item_id).state, State.RECOVERY)
+            finally:
+                db.close()
+
+    def test_ia_missing_key_is_provider_error(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+        with self.assertRaisesRegex(Exception, "GEMINI_API_KEY ausente"):
+            CaptionGenerator(provider=GeminiProvider()).generate({
+                "productName": "Produto"
+            })
 
 
 if __name__ == "__main__":
