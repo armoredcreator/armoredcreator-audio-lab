@@ -3,7 +3,7 @@
 > Laboratório de reconstrução e certificação: `armoredcreator/armoredcreator-test`.
 > O repositório oficial `armoredcreator/armoredcreator` e a branch `audit/baseline-2026-09-19` permanecem intocados.
 
-## 1. Estado atual — 27/09/2026
+## 1. Estado atual — 29/09/2026
 
 Esta é a referência operacional da versão atual.
 
@@ -34,6 +34,20 @@ Regras atuais: português do Brasil; 2–3 palavras no texto principal; exatamen
 ### Vision V2
 
 **Fora desta versão.** Não existe módulo V2 nem `validate_vision_v2_real.py` nesta branch. Branches antigas de V2 não fazem parte da versão final e não devem ser reintroduzidas.
+
+### Auditoria de certificação — 29/09
+
+A revisão módulo a módulo identificou e corrigiu somente bloqueios comprovados no contrato atual:
+
+- Gemini/API e ausência de credencial agora são tratados como falha técnica RECOVERY; falhas inesperadas de programação/configuração da Caption não são convertidas em WAITING_VISION.
+- CATCH-UP não executa Recovery inline durante o scan histórico; ele termina o scan atual e só depois tenta Recovery.
+- Quando Recovery realmente progride, o iterador histórico é reconstruído para permitir a retomada no mesmo processo sem perder o checkpoint durável.
+- Falha de materialização deixa a reserva RECEIVED sem original e recebe uma única tentativa de rediscovery no mesmo processo; nova falha encerra sem loop.
+- PUBLISHED com cleanup_completed=0 participa da Recovery de startup e bloqueia a progressão até o cleanup terminar.
+- Migrações SQLite não removem mais tabelas históricas de evidência da Vision.
+- Valores reais de origem/grupo/tópico do ambiente não ficam mais como defaults no código ou em .env.example; a configuração operacional deve vir do ambiente/credentials/project.env.
+
+A suíte completa deve ser executada novamente antes de qualquer CATCH-UP histórico real.
 
 ---
 
@@ -244,7 +258,7 @@ Um novo conteúdo LIVE não pode ser artificialmente injetado porque a fonte per
 
 ## 14. Congelamento
 
-O código está congelado novamente após a correção de normalização Story. A suíte automatizada local registrada anteriormente continua sendo a última execução completa; a nova correção deve ser validada localmente antes do CATCH-UP histórico.
+A branch permanece em fase de certificação. As correções da auditoria de 29/09 são mínimas e estão aguardando a nova execução da suíte automatizada antes do CATCH-UP histórico.
 
 Base da versão congelada antes da correção Story:
 ```text
@@ -252,6 +266,8 @@ a345f2fd997d841e1e38f8e4609ed4af7083dd30
 ```
 
 Correção Story integrada na branch congelada pelo PR #29. O commit atual da branch é registrado pelo Git e deve ser usado no CATCH-UP após a validação local.
+
+Depois da nova suíte verde e do CATCH-UP histórico, congelar novamente. Até lá, somente falhas bloqueadoras reproduzidas na certificação justificam novas alterações.
 
 Depois do congelamento:
 
