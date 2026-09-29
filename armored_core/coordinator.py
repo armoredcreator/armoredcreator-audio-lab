@@ -529,8 +529,9 @@ class Coordinator:
             if pending_rediscovery:
                 rediscovery_attempted.update(pending_rediscovery)
                 reset = getattr(self.source, "reset_historical_scan", None)
-                if reset is not None:
-                    reset()
+                if reset is None:
+                    return
+                reset()
                 continue
 
             # No Recovery/rediscovery progress: stop instead of tight-looping.
