@@ -475,6 +475,7 @@ class Coordinator:
         items and, when progress is made, rescan from the durable checkpoint.
         WAITING_VISION is intentionally not auto-retried here.
         """
+        rediscovery_attempted: set[str] = set()
         while True:
             await self.run_catch_up_async()
             if self.db.historical_complete():
@@ -509,6 +510,23 @@ class Coordinator:
             # remains exhausted and its in-memory _seen set would hide the
             # already-scanned candidate on the same process lifetime.
             if not before.issubset(after):
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is not None:
+                    reset()
+                continue
+
+            # A materialization failure leaves a RECEIVED reservation with
+            # no immutable original. Give each such candidate exactly one
+            # same-process rediscovery attempt before stopping.
+            received_missing = {
+                item_id
+                for item_id in before
+                if self.db.get(item_id).state == State.RECEIVED
+                and not self.db.get(item_id).original_path.is_file()
+            }
+            pending_rediscovery = received_missing - rediscovery_attempted
+            if pending_rediscovery:
+                rediscovery_attempted.update(pending_rediscovery)
                 reset = getattr(self.source, "reset_historical_scan", None)
                 if reset is not None:
                     reset()
