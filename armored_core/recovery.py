@@ -5,7 +5,7 @@ import shutil
 from .database import Database
 from .models import PublicationCheck, State
 from .pipeline import Pipeline
-from .services import Publisher, StudioService, VisionService
+from .services import AIService, Publisher, StudioService, VisionService
 from .storage import Storage
 
 
@@ -19,9 +19,10 @@ class Recovery:
         vision: VisionService,
         studio: StudioService,
         publisher: Publisher,
+        ia: AIService | None = None,
     ):
         self.db, self.storage = db, storage
-        self.pipeline = Pipeline(db, storage, vision, studio, publisher)
+        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
 
     def _reset_processing_artifacts(self, item_id: str) -> None:
         """Keep only the immutable ORIGINAL before rebuilding derived artifacts."""
@@ -116,6 +117,20 @@ class Recovery:
             # The only safe exception is unresolved Vision: without resolved
             # product metadata, restart at Vision from the immutable ORIGINAL.
             self.db.transition(item_id, State.VISION, "publication-absent-rebuild-vision")
+            self.pipeline.run(item_id)
+            return
+
+        # ArmoredIA is its own recoverable stage. Its failure never
+        # invalidates or reruns a product already resolved by Vision V1.
+        if (
+            item.state == State.IA
+            or (
+                last_event
+                and last_event["old_state"] == State.IA.value
+                and last_event["new_state"] == State.RECOVERY.value
+            )
+        ):
+            self.db.transition(item_id, State.IA, "recovery-retry-ia")
             self.pipeline.run(item_id)
             return
 
