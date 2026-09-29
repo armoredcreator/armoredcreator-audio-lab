@@ -79,6 +79,69 @@ class HubContractTests(unittest.TestCase):
             pass
 
 
+    def test_unscoped_exact_publication_can_survive_missing_topic_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                hub = ArmoredHub(root, db)
+
+                message = type(
+                    "Message",
+                    (),
+                    {
+                        "reply_to": None,
+                        "message": hub._publication_text(item),
+                        "video": object(),
+                        "document": None,
+                    },
+                )()
+
+                self.assertFalse(
+                    hub._telegram_publication_matches(
+                        message, item, 228, topic_scoped=False
+                    )
+                )
+                self.assertTrue(
+                    hub._telegram_publication_matches(
+                        message, item, 228,
+                        topic_scoped=False,
+                        allow_unknown_topic=True,
+                    )
+                )
+            finally:
+                db.close()
+
+    def test_unscoped_candidate_is_reverified_by_message_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                db.publication_started(item.item_id)
+                hub = ArmoredHub(root, db)
+
+                calls = []
+                hub._find_telegram_publications = lambda current: ["474"]
+                hub._verify_telegram_message = (
+                    lambda message_id, current: calls.append(message_id) or True
+                )
+
+                self.assertEqual(
+                    hub.check_publication(item),
+                    PublicationCheck.CONFIRMED,
+                )
+                self.assertEqual(calls, ["474"])
+                self.assertEqual(
+                    db.publication(item.item_id)["published_message_id"],
+                    "474",
+                )
+            finally:
+                db.close()
+
     def test_publish_once_does_not_preflight_fresh_publication(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
