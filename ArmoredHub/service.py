@@ -252,7 +252,7 @@ class ArmoredHub:
     def _find_telegram_publications(self, item: Item) -> list[str] | None:
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not api_id or not api_hash or not topic_id:
             return None
 
@@ -373,7 +373,7 @@ class ArmoredHub:
     def _verify_telegram_message(self, message_id: str, item: Item) -> bool | None:
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not message_id or not api_id or not api_hash or not topic_id:
             return None
         try:
@@ -462,7 +462,7 @@ class ArmoredHub:
 
     def _publish_telegram(self, item: Item, output: Path) -> PublicationResult:
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not token or not topic_id:
             raise RuntimeError(
                 "Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN e ARMORED_HUB_TOPIC_ID"
