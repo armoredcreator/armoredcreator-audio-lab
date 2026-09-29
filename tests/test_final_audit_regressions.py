@@ -277,6 +277,29 @@ class AuditRegressionTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
+    def test_database_migration_does_not_drop_legacy_vision_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "db.sqlite"
+            db = Database(path)
+            db.conn.execute(
+                "CREATE TABLE vision_candidates (id INTEGER PRIMARY KEY, evidence TEXT)"
+            )
+            db.conn.execute(
+                "INSERT INTO vision_candidates(id,evidence) VALUES(1,'historical')"
+            )
+            db.conn.commit()
+            db.close()
+
+            reopened = Database(path)
+            try:
+                row = reopened.conn.execute(
+                    "SELECT evidence FROM vision_candidates WHERE id=1"
+                ).fetchone()
+                self.assertIsNotNone(row)
+                self.assertEqual(row["evidence"], "historical")
+            finally:
+                reopened.close()
+
     def test_caption_unexpected_runtime_error_is_not_waiting_vision(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
         try:
