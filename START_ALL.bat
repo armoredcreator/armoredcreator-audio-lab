@@ -20,6 +20,8 @@ rem Caminho do Telegram Bot API nesta maquina.
 rem Para outra maquina, altere somente esta linha.
 set "BOT_API_EXE=C:\Users\Administrador\Downloads\TelegramBotAPI\telegram-bot-api\build\Release\telegram-bot-api.exe"
 set "BOT_API_PORT=8081"
+set "ARMORED_TELEGRAM_BOT_API_URL=http://127.0.0.1:%BOT_API_PORT%/bot"
+set "ARMORED_TELEGRAM_BOT_API_FILE_URL=http://127.0.0.1:%BOT_API_PORT%/file/bot"
 set "BOT_API_STARTED_BY_SCRIPT=0"
 set "BOT_API_PID="
 set "BOT_API_DIR="
@@ -79,9 +81,10 @@ if not exist "%BOT_API_EXE%" (
     exit /b 1
 )
 
-rem Start-Process herda TELEGRAM_API_ID/HASH do ambiente.
-rem O Bot API recebe somente parametros nao sensiveis.
-powershell -NoProfile -Command "$p=Start-Process -FilePath '%BOT_API_EXE%' -ArgumentList '--local','--http-port=%BOT_API_PORT%' -WorkingDirectory '%BOT_API_DIR%' -WindowStyle Minimized -PassThru; Write-Output $p.Id" > "%TEMP%\armored_bot_api_pid.txt"
+rem O servidor oficial aceita API ID/HASH por ambiente ou argumentos.
+rem Passamos explicitamente os valores para tornar o processo independente do
+rem ambiente herdado e garantir que a instancia local esteja corretamente configurada.
+powershell -NoProfile -Command "$p=Start-Process -FilePath '%BOT_API_EXE%' -ArgumentList '--api-id=%TELEGRAM_API_ID%','--api-hash=%TELEGRAM_API_HASH%','--local','--http-port=%BOT_API_PORT%' -WorkingDirectory '%BOT_API_DIR%' -WindowStyle Minimized -PassThru; Write-Output $p.Id" > "%TEMP%\armored_bot_api_pid.txt"
 
 if errorlevel 1 (
     echo ERRO: nao foi possivel iniciar o Telegram Bot API.
