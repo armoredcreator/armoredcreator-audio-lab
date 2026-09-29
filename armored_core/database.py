@@ -91,6 +91,7 @@ class Database:
                 ("original_url", "ALTER TABLE items ADD COLUMN original_url TEXT"),
                 ("original_sha256", "ALTER TABLE items ADD COLUMN original_sha256 TEXT"),
                 ("publication_caption", "ALTER TABLE items ADD COLUMN publication_caption TEXT"),
+                ("ia_context_json", "ALTER TABLE items ADD COLUMN ia_context_json TEXT NOT NULL DEFAULT '{}'"),
                 ("affiliate_urls_json", "ALTER TABLE items ADD COLUMN affiliate_urls_json TEXT NOT NULL DEFAULT '[]'"),
                 ("attempts", "ALTER TABLE items ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
                 ("recovery_count", "ALTER TABLE items ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
@@ -238,6 +239,7 @@ class Database:
             row["original_sha256"], row["attempts"], row["recovery_count"], bool(row["cleanup_completed"]),
             row["publication_caption"],
             tuple(json.loads(row["affiliate_urls_json"] or "[]")),
+            json.loads(row["ia_context_json"] or "{}"),
         )
 
     def last_state_event(self, item_id: str):
@@ -302,6 +304,7 @@ class Database:
         affiliate_url: str,
         affiliate_urls=(),
         publication_caption: str | None = None,
+        ia_context: dict | None = None,
     ) -> None:
         links = [str(link).strip() for link in (affiliate_urls or ()) if str(link).strip()]
         if not links and affiliate_url:
@@ -309,19 +312,34 @@ class Database:
 
         self.conn.execute(
             "UPDATE items SET affiliate_name=?, affiliate_url=?, publication_caption=?, "
-            "affiliate_urls_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            "affiliate_urls_json=?, ia_context_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
             (
                 affiliate_name,
                 affiliate_url,
                 publication_caption,
                 json.dumps(list(dict.fromkeys(links)), ensure_ascii=False),
+                json.dumps(ia_context or {}, ensure_ascii=False, default=str),
                 item_id,
             ),
         )
         self.conn.commit()
 
 
-    def set_working(self, item_id: str, path: Path | None) -> None:
+    def set_ia_context(self, item_id: str, context: dict | None) -> None:
+        self.conn.execute(
+            "UPDATE items SET ia_context_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (json.dumps(context or {}, ensure_ascii=False, default=str), str(item_id)),
+        )
+        self.conn.commit()
+
+    def set_caption(self, item_id: str, caption: str) -> None:
+        self.conn.execute(
+            "UPDATE items SET publication_caption=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (str(caption), str(item_id)),
+        )
+        self.conn.commit()
+
+    def set_working(self, item_id: str, path: Path | None) -> None
         self.conn.execute(
             "UPDATE items SET working_path=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
             (str(path), item_id),
