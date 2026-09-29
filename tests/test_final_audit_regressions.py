@@ -51,7 +51,7 @@ class AuditRegressionTests(unittest.TestCase):
                     async def materialize(target):
                         target.write_bytes(b"first")
                     return SimpleNamespace(
-                        telegram_message_id="first",
+                        telegram_message_id="501",
                         source_id="telegram",
                         topic_id=1,
                         topic_name="topic",
@@ -62,7 +62,7 @@ class AuditRegressionTests(unittest.TestCase):
                     async def materialize(target):
                         target.write_bytes(b"second")
                     return SimpleNamespace(
-                        telegram_message_id="second",
+                        telegram_message_id="502",
                         source_id="telegram",
                         topic_id=1,
                         topic_name="topic",
@@ -79,7 +79,7 @@ class AuditRegressionTests(unittest.TestCase):
 
         class CoordinatorUnderTest(Coordinator):
             def run(self, item_id):
-                if item_id == "first":
+                if item_id == "501":
                     self.db.transition(item_id, State.RECOVERY, "synthetic")
                     return
                 self.db.transition(item_id, State.PUBLISHED, "synthetic")
@@ -99,10 +99,10 @@ class AuditRegressionTests(unittest.TestCase):
             )
             try:
                 processed = coordinator.run_catch_up()
-                self.assertEqual(processed, ["first", "second"])
+                self.assertEqual(processed, ["501", "502"])
                 self.assertEqual(source.calls, 3)
-                self.assertEqual(db.get("first").state, State.RECOVERY)
-                self.assertEqual(db.get("second").state, State.PUBLISHED)
+                self.assertEqual(db.get("501").state, State.RECOVERY)
+                self.assertEqual(db.get("502").state, State.PUBLISHED)
                 self.assertFalse(db.historical_complete())
             finally:
                 coordinator.close()
@@ -118,9 +118,9 @@ class AuditRegressionTests(unittest.TestCase):
             async def fetch_next_async(self):
                 self.scan += 1
                 if self.scan == 1:
-                    return self._message("first")
+                    return self._message("501")
                 if self.scan == 2:
-                    return self._message("second")
+                    return self._message("502")
                 if self.scan == 3:
                     return None
                 if self.scan == 4:
@@ -157,14 +157,14 @@ class AuditRegressionTests(unittest.TestCase):
 
         class CoordinatorUnderTest(Coordinator):
             def run(self, item_id):
-                if item_id == "first" and self.db.get(item_id).state != State.PUBLISHED:
+                if item_id == "501" and self.db.get(item_id).state != State.PUBLISHED:
                     self.db.transition(item_id, State.RECOVERY, "synthetic")
                     raise RuntimeError("synthetic")
                 self.db.transition(item_id, State.PUBLISHED, "synthetic")
                 self.db.mark_cleanup_completed(item_id)
 
             def recover_pending(self):
-                item = self.db.get("first")
+                item = self.db.get("501")
                 if item.state == State.RECOVERY:
                     self.db.transition(item.item_id, State.PUBLISHED, "recovered")
                     self.db.mark_cleanup_completed(item.item_id)
@@ -184,8 +184,8 @@ class AuditRegressionTests(unittest.TestCase):
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
                 self.assertEqual(source.reset_calls, 1)
                 self.assertTrue(db.historical_complete())
-                self.assertEqual(db.get("first").state, State.PUBLISHED)
-                self.assertEqual(db.get("second").state, State.PUBLISHED)
+                self.assertEqual(db.get("501").state, State.PUBLISHED)
+                self.assertEqual(db.get("502").state, State.PUBLISHED)
             finally:
                 coordinator.close()
 
@@ -201,13 +201,13 @@ class AuditRegressionTests(unittest.TestCase):
             async def fetch_next_async(self):
                 if self.index >= 3:
                     return None
-                item_id = ("download-fail", "later")[self.index] if self.index < 2 else None
+                item_id = ("503", "504")[self.index] if self.index < 2 else None
                 self.index += 1
                 if item_id is None:
                     return None
 
                 async def materialize(target):
-                    if item_id == "download-fail" and self.fail_once:
+                    if item_id == "503" and self.fail_once:
                         self.fail_once = False
                         raise TimeoutError("synthetic-download-timeout")
                     target.write_bytes(item_id.encode())
@@ -247,8 +247,8 @@ class AuditRegressionTests(unittest.TestCase):
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
                 self.assertEqual(source.reset_calls, 1)
                 self.assertTrue(db.historical_complete())
-                self.assertEqual(db.get("download-fail").state, State.PUBLISHED)
-                self.assertEqual(db.get("later").state, State.PUBLISHED)
+                self.assertEqual(db.get("503").state, State.PUBLISHED)
+                self.assertEqual(db.get("504").state, State.PUBLISHED)
             finally:
                 coordinator.close()
 
