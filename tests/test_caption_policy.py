@@ -39,6 +39,13 @@ class CaptionPolicyTests(unittest.TestCase):
         )
         self.assertEqual(result, "Cores organizadas ✨\n#unhas #organizacao")
 
+    def test_accepts_gemini_multiline_and_inline_hashtags_and_normalizes_output(self):
+        result = validate_caption(
+            "Cores\norganizadas ✨ #unhas #organizacao",
+            product_name="Expositor de esmaltes com gavetas",
+        )
+        self.assertEqual(result, "Cores organizadas ✨\n#unhas #organizacao")
+
     def test_accepts_gemini_same_line_hashtags_and_normalizes_output(self):
         result = validate_caption(
             "Cores organizadas ✨ #unhas #organizacao",
