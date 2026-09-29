@@ -341,13 +341,21 @@ class AuditRegressionTests(unittest.TestCase):
             finally:
                 db.close()
 
-    def test_ia_missing_key_is_provider_error(self, monkeypatch):
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
-        with self.assertRaisesRegex(Exception, "GEMINI_API_KEY ausente"):
-            CaptionGenerator(provider=GeminiProvider()).generate({
-                "productName": "Produto"
-            })
+    def test_ia_missing_key_is_provider_error(self):
+        old_key = os.environ.pop("GEMINI_API_KEY", None)
+        old_enabled = os.environ.get("ARMORED_IA_CAPTION_ENABLED")
+        os.environ["ARMORED_IA_CAPTION_ENABLED"] = "1"
+        try:
+            with self.assertRaisesRegex(Exception, "GEMINI_API_KEY ausente"):
+                CaptionGenerator(provider=GeminiProvider()).generate({
+                    "productName": "Produto"
+                })
+        finally:
+            os.environ.pop("ARMORED_IA_CAPTION_ENABLED", None)
+            if old_enabled is not None:
+                os.environ["ARMORED_IA_CAPTION_ENABLED"] = old_enabled
+            if old_key is not None:
+                os.environ["GEMINI_API_KEY"] = old_key
 
 
 if __name__ == "__main__":
