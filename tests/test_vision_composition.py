@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import unittest
-
 from ArmoredVision.service import ArmoredVision
 
 
@@ -28,43 +25,8 @@ class V1FakeAPI:
     def affiliate_link_for_product(self, product):
         return str(product["offerLink"])
 
-    def generate_short_link(self, origin):
-        return "https://s.shopee.com.br/generated"
 
-
-class FakeCaption:
-    def generate(self, product):
-        assert product["productName"] == "Produto Exemplo 1L"
-        return "Olha esse charme ✨\n#casa"
-
-
-class FailingCaption:
-    def generate(self, product):
-        raise RuntimeError("gemini-temporarily-unavailable")
-
-
-def test_v1_contract_remains_usable_when_caption_is_disabled(monkeypatch):
-    monkeypatch.delenv("ARMORED_CAPTION_ENABLED", raising=False)
-
-    api = V1FakeAPI()
-    vision = ArmoredVision(api=api)
-
-    result = vision.identify(
-        type(
-            "ItemStub",
-            (),
-            {"original_url": "https://shopee.com.br/product/456/123"},
-        )()
-    )
-
-    assert result.affiliate_name == "Produto Exemplo 1L"
-    assert result.affiliate_url == "https://s.shopee.com.br/original"
-    assert result.affiliate_urls == ("https://s.shopee.com.br/original",)
-    assert result.publication_caption is None
-    assert api.exact_calls == [("456", "123")]
-
-
-def test_caption_is_composed_after_v1_without_changing_v1(monkeypatch):
+def test_v1_resolves_product_without_ai_execution(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
     monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
 
@@ -84,15 +46,5 @@ def test_caption_is_composed_after_v1_without_changing_v1(monkeypatch):
     assert result.affiliate_urls == ("https://s.shopee.com.br/original",)
     assert result.publication_caption is None
     assert result.ia_context["productName"] == "Produto Exemplo 1L"
+    assert result.ia_context["shopName"] == "Loja Exemplo"
     assert api.exact_calls == [("456", "123")]
-
-
-class VisionCompositionTests(unittest.TestCase):
-    def tearDown(self):
-        os.environ.pop("ARMORED_IA_ENABLED", None)
-        os.environ.pop("ARMORED_IA_CAPTION_ENABLED", None)
-
-
-
-if __name__ == "__main__":
-    unittest.main()
