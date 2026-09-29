@@ -256,7 +256,7 @@ class IncrementalCoordinatorTests(unittest.TestCase):
 
             async def fetch_next_async(self):
                 self.calls += 1
-                if self.calls == 1:
+                if self.calls in (1, 2):
                     async def materialize(target):
                         target.write_bytes(b"RECOVERY-FIRST")
                     return SimpleNamespace(
