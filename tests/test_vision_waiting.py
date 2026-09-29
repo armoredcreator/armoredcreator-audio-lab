@@ -144,6 +144,39 @@ class VisionWaitingTests(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_caption_exhaustion_goes_to_recovery_without_waiting_vision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            item_id = self._item(db, storage, "caption-exhausted-1")
+            from unittest.mock import patch
+
+            class _CaptionExhausted:
+                def generate(self, product):
+                    from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError
+                    raise CaptionGenerationError("Nenhuma das 10 candidata(s) passou pela Policy")
+
+            api = type("API", (), {
+                "get_exact_product": lambda self, shop_id, item_id: {"productName": "Bancada Suspensa"},
+                "affiliate_link_for_product": lambda self, product: "https://affiliate.invalid/456",
+            })()
+            vision = ArmoredVision(api=api, caption_generator=_CaptionExhausted())
+            publisher = _Publisher()
+            studio = _Studio()
+            resolved = type("Resolved", (), {"shop_id": "123", "item_id": "456"})()
+            try:
+                with patch("ArmoredVision.service.resolve_short_url", return_value=resolved), \
+                     patch.dict("os.environ", {"ARMORED_CAPTION_ENABLED": "1"}, clear=False):
+                    Pipeline(db, storage, vision, studio, publisher).run(item_id)
+                self.assertEqual(db.get(item_id).state, State.RECOVERY)
+                self.assertIn("CaptionGenerationError", db.last_error(item_id) or "")
+                self.assertEqual(studio.calls, 0)
+                self.assertEqual(publisher.calls, 0)
+                self.assertTrue(db.get(item_id).original_path.is_file())
+            finally:
+                db.close()
+
     def test_armored_vision_maps_exact_not_found_to_unresolved(self):
         item = type("ItemStub", (), {
             "original_url": "https://shopee.com.br/a-i.123.456",
