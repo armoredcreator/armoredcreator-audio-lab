@@ -113,4 +113,3 @@ def test_zero_catchup_limit_means_unlimited(monkeypatch, tmp_path):
     assert source.historical_collection_limited is False
     assert source.historical_limit_reached is False
     assert source._historical_limit is None
-}
