@@ -47,11 +47,50 @@ def _gemini_context(product: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+class CaptionTransportError(CaptionGenerationError):
+    """Gemini/API transport or response-availability failure after retries."""
+
+
+def _candidate_texts(data: dict[str, Any]) -> list[str]:
+    raw = data.get("captions")
+    if not isinstance(raw, list):
+        raise CaptionTransportError("Gemini não retornou a lista de candidatas")
+    candidates: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            text = entry.strip()
+        elif isinstance(entry, dict):
+            text = str(entry.get("text") or "").strip()
+        else:
+            text = ""
+        if text and text not in candidates:
+            candidates.append(text)
+        if len(candidates) >= 10:
+            break
+    if not candidates:
+        raise CaptionTransportError("Gemini retornou zero candidatas de legenda")
+    return candidates
+
+
 class CaptionGenerator:
-    """Gemini-only caption generator; pipeline advances only with a valid Gemini caption."""
+    """One Gemini request -> up to ten candidates -> local Policy selection."""
 
     def __init__(self, requester: Callable[..., Any] | None = None):
         self.requester = requester or requests.post
+
+    @staticmethod
+    def _is_retryable_request_error(exc: requests.RequestException) -> bool:
+        if isinstance(
+            exc,
+            (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ),
+        ):
+            return True
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        return status in {429, 500, 502, 503, 504}
 
     def generate(self, product: dict[str, Any]) -> str:
         if os.getenv("ARMORED_CAPTION_ENABLED", "0") != "1":
@@ -67,38 +106,41 @@ Você recebe contexto de um produto que JÁ FOI identificado pela Vision V1.
 A identidade definida pela Vision V1 é a fonte de verdade. Você NÃO deve
 identificar, corrigir, substituir ou renomear o produto.
 
-Sua tarefa é interpretar livremente o contexto e criar uma reação curta,
-natural e espontânea que pareça escrita especificamente para ESTE produto.
-Não siga fórmulas, padrões de frases ou vocabulário fixo. Produtos diferentes
-devem naturalmente produzir reações diferentes quando o contexto justificar.
+Sua tarefa é gerar ATÉ 10 opções de reação curta, natural e espontânea que
+pareçam escritas especificamente para ESTE produto. Gere opções diferentes
+entre si quando o contexto permitir, sem usar fórmulas fixas.
 
 Use qualquer informação útil disponível no contexto V1 — categoria, descrição,
 atributos, características, uso percebido, ambiente, estilo, aparência e
 demais sinais relevantes. Não force uma característica quando ela não estiver
 sustentada pelos dados.
 
-REGRAS:
+REGRAS PARA CADA OPÇÃO:
 - Português do Brasil.
-- A legenda DEVE combinar diretamente com o produto específico identificado no contexto V1.
-- O nome do produto é APENAS uma referência interna para interpretação. Não copie o título completo nem reproduza uma expressão distintiva do nome. É permitido usar uma palavra genérica que descreva naturalmente o tipo de item (por exemplo, "bolsa", "tênis" ou "batom") quando isso tornar a reação mais natural. Nunca copie uma combinação distintiva de palavras do título para a legenda ou hashtags.
-- O texto principal deve ser uma reação específica ao produto, evitando frases coringa que poderiam servir para qualquer item.
-- As hashtags devem ser específicas e diretamente relacionadas ao produto, categoria, uso, ambiente ou característica percebida; escolha naturalmente as hashtags mais adequadas ao contexto.
-- Antes de responder, confira internamente se frase, emoji e hashtags combinam semanticamente entre si e com o produto recebido.
-- Escolha exatamente UM emoji que naturalmente combine com a reação e com o contexto do produto. A repetição de um emoji entre produtos diferentes é permitida quando ele for semanticamente adequado. Não escolha emojis por obrigação de variar e não transforme um emoji específico em assinatura fixa.
-- Não explique seu raciocínio; retorne somente a legenda final.
-- Se houver imagem, use-a apenas para reforçar a compreensão do produto já identificado pela V1; não invente outro produto.
+- A legenda deve combinar diretamente com o produto específico identificado no contexto V1.
+- O nome do produto é apenas uma referência interna. Não copie o título completo
+  nem reproduza uma expressão distintiva do nome.
+- Uma palavra genérica do tipo do item pode ser usada naturalmente.
+- O texto principal deve ser uma reação específica ao produto, evitando frases
+  coringa que poderiam servir para qualquer item.
+- As hashtags devem ser específicas e diretamente relacionadas ao produto,
+  categoria, uso, ambiente ou característica percebida.
+- Exatamente UM emoji.
 - Texto principal: EXATAMENTE 2 ou 3 palavras.
-- Exatamente 1 emoji.
-- Segunda linha: exatamente 1 ou 2 hashtags relevantes ao contexto.
-- NÃO copie o título completo nem uma combinação distintiva de palavras do produto.
+- Exatamente 1 ou 2 hashtags.
+- NÃO use embalagem, tampa, frasco, lacre ou termos comerciais.
 - NÃO escreva marca ou modelo.
 - NÃO repita descrição, atributos ou características técnicas.
-- NÃO revele quantidade, medidas, voltagem, embalagem ou termos comerciais.
+- NÃO revele quantidade, medidas, voltagem ou embalagem.
 - NÃO use linguagem de venda, urgência, promoção ou desconto.
-- NÃO use: compre, comprar, garanta, aproveite, oferta, promoção, desconto,
-  imperdível, corra ou equivalentes.
+- NÃO use: compre, comprar, garanta, garantir, aproveite, oferta, promoção,
+  desconto, imperdível, corra, não perca ou equivalentes.
 - Não use hashtags para contornar essas regras.
-- Retorne somente as duas linhas finais, sem aspas e sem explicações.
+
+Retorne SOMENTE JSON válido neste formato:
+{"captions":["opção 1","opção 2","..."]}
+
+A lista pode ter até 10 opções. Não inclua explicações, markdown ou campos extras.
 """.strip()
 
         context = _gemini_context(product)
@@ -129,9 +171,9 @@ REGRAS:
             except requests.RequestException:
                 pass
 
-        attempts = max(1, int(os.getenv("ARMORED_CAPTION_MAX_ATTEMPTS", "5")))
+        attempts = max(1, int(os.getenv("ARMORED_CAPTION_MAX_ATTEMPTS", "3")))
         retry_delay = max(0.0, float(os.getenv("ARMORED_CAPTION_RETRY_DELAY", "2")))
-        last_error = None
+        last_transport_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
             try:
@@ -140,34 +182,65 @@ REGRAS:
                     headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
                     json={
                         "contents": [{"parts": parts}],
-                        "generationConfig": {"maxOutputTokens": 80},
+                        "generationConfig": {
+                            "maxOutputTokens": 400,
+                            "responseMimeType": "application/json",
+                        },
                     },
                     timeout=int(os.getenv("ARMORED_CAPTION_API_TIMEOUT", "90")),
                 )
                 response.raise_for_status()
-                data = response.json()
-                try:
-                    generated = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                except (KeyError, IndexError, TypeError) as exc:
-                    raise CaptionGenerationError("Gemini não retornou texto de legenda") from exc
+            except requests.RequestException as exc:
+                if not self._is_retryable_request_error(exc):
+                    raise CaptionGenerationError(
+                        f"Gemini recusou a solicitação: {exc}"
+                    ) from exc
+                last_transport_error = exc
+                if attempt < attempts:
+                    time.sleep(retry_delay)
+                    continue
+                raise CaptionTransportError(
+                    f"Gemini indisponível após {attempts} tentativa(s): {exc}"
+                ) from exc
 
+            try:
+                data = response.json()
+                candidates = _candidate_texts(data)
+            except CaptionTransportError as exc:
+                last_transport_error = exc
+                if attempt < attempts:
+                    time.sleep(retry_delay)
+                    continue
+                raise CaptionTransportError(
+                    f"Resposta inválida do Gemini após {attempts} tentativa(s): {exc}"
+                ) from exc
+            except (ValueError, TypeError, KeyError) as exc:
+                last_transport_error = exc
+                if attempt < attempts:
+                    time.sleep(retry_delay)
+                    continue
+                raise CaptionTransportError(
+                    f"Resposta inválida do Gemini após {attempts} tentativa(s): {exc}"
+                ) from exc
+
+            policy_errors: list[str] = []
+            for index, candidate in enumerate(candidates, start=1):
                 try:
                     return validate_caption(
-                        generated,
+                        candidate,
                         product_name=str(product.get("productName") or ""),
                         product_context=product,
                     )
                 except CaptionPolicyError as exc:
-                    raise CaptionGenerationError(
-                        f"Gemini gerou legenda fora da política: {exc}"
-                    ) from exc
+                    policy_errors.append(f"{index}: {exc}")
 
-            except (requests.RequestException, CaptionGenerationError) as exc:
-                last_error = exc
-                if attempt < attempts:
-                    time.sleep(retry_delay)
+            # Policy rejection is local and final for this request. Never call
+            # Gemini again merely because every returned candidate was rejected.
+            detail = "; ".join(policy_errors[:10])
+            raise CaptionGenerationError(
+                f"Nenhuma das {len(candidates)} candidata(s) passou pela Policy: {detail}"
+            )
 
-        raise CaptionGenerationError(
-            f"Gemini não conseguiu gerar uma legenda válida após "
-            f"{attempts} tentativa(s): {last_error}"
-        ) from last_error
+        raise CaptionTransportError(
+            f"Gemini indisponível após {attempts} tentativa(s): {last_transport_error}"
+        )
