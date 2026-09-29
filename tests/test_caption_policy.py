@@ -193,7 +193,7 @@ class CaptionPolicyTests(unittest.TestCase):
         })
 
         self.assertEqual(calls["count"], 1)
-        self.assertEqual(caption, "Olha esse charme ✨\\n#beleza")
+        self.assertEqual(caption, "Olha esse charme ✨\n#beleza")
 
     def test_generator_does_not_retry_when_all_candidates_fail_policy(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
