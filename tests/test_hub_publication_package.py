@@ -53,7 +53,6 @@ class HubPublicationPackageTests(unittest.TestCase):
             "https://s.shopee.com.br/original",
         )
 
-
     def test_telegram_send_timeout_logs_real_error_and_reconciliation(self):
         from unittest.mock import patch
 
@@ -68,6 +67,10 @@ class HubPublicationPackageTests(unittest.TestCase):
                 item = make_item(result_path=output)
                 hub = ArmoredHub(Path(td), db)
 
+                def fail_run_async(coro):
+                    coro.close()
+                    raise TimedOut("Telegram read timeout after 60 seconds")
+
                 with patch.dict(
                     "os.environ",
                     {
@@ -79,7 +82,7 @@ class HubPublicationPackageTests(unittest.TestCase):
                     hub, "_video_metadata", return_value=(720, 1280, 10)
                 ), patch.object(
                     hub, "_run_async",
-                    side_effect=TimedOut("Telegram read timeout after 60 seconds"),
+                    side_effect=fail_run_async,
                 ), patch.object(
                     hub, "check_publication", return_value=PublicationCheck.ABSENT
                 ), patch(
@@ -173,6 +176,7 @@ class HubPublicationPackageTests(unittest.TestCase):
                 )
             finally:
                 db.close()
+
 
 if __name__ == "__main__":
     unittest.main()
