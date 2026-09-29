@@ -189,6 +189,69 @@ class AuditRegressionTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
+    def test_failed_materialization_gets_one_same_run_rediscovery(self):
+        class Source:
+            def __init__(self, db):
+                self.db = db
+                self.index = 0
+                self.fail_once = True
+                self.reset_calls = 0
+                self.checkpoints = []
+
+            async def fetch_next_async(self):
+                if self.index >= 3:
+                    return None
+                item_id = ("download-fail", "later")[self.index] if self.index < 2 else None
+                self.index += 1
+                if item_id is None:
+                    return None
+
+                async def materialize(target):
+                    if item_id == "download-fail" and self.fail_once:
+                        self.fail_once = False
+                        raise TimeoutError("synthetic-download-timeout")
+                    target.write_bytes(item_id.encode())
+
+                return SimpleNamespace(
+                    telegram_message_id=item_id,
+                    source_id="telegram",
+                    topic_id=1,
+                    topic_name="topic",
+                    original_url="https://shopee.example/" + item_id,
+                    materialize=materialize,
+                )
+
+            def reset_historical_scan(self):
+                self.reset_calls += 1
+                self.index = 0
+
+            def mark_ingested(self, _message_id):
+                pass
+
+            def commit_live_checkpoints(self, checkpoints):
+                self.checkpoints.append(dict(checkpoints))
+
+            def complete_historical_sync(self):
+                self.db.complete_historical_sync()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            source = Source(db)
+            coordinator = Coordinator(
+                db, storage, _Vision(), _Studio(storage), _Publisher(), source
+            )
+            try:
+                import asyncio
+                asyncio.run(coordinator._run_catch_up_with_recovery_async())
+                self.assertEqual(source.reset_calls, 1)
+                self.assertTrue(db.historical_complete())
+                self.assertEqual(db.get("download-fail").state, State.PUBLISHED)
+                self.assertEqual(db.get("later").state, State.PUBLISHED)
+            finally:
+                coordinator.close()
+
     def test_published_cleanup_pending_is_recovered_on_startup(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
