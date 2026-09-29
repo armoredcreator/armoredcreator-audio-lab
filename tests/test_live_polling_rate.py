@@ -49,7 +49,7 @@ class _Reader:
 
 
 class LivePollingRateTests(unittest.TestCase):
-    def test_live_polls_one_topic_per_cycle_in_round_robin(self):
+    def test_live_polls_one_topic_per_cycle_in_round_robin(self, monkeypatch):
         source = TelegramSource.__new__(TelegramSource)
         source.root = Path(".")
         source.reader = _Reader()
@@ -58,7 +58,9 @@ class LivePollingRateTests(unittest.TestCase):
         source._topics = [(1, "one"), (2, "two"), (3, "three")]
         source._live_topic_index = 0
 
-        async def scenario():
+        monkeypatch.setenv("ARMORED_SYNC_SOURCE", "123456")
+
+    async def scenario():
             first, _ = await source.fetch_live_candidate_async()
             self.assertIsNone(first)
             second, checkpoints = await source.fetch_live_candidate_async()
