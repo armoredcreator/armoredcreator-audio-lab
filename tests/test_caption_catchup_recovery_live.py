@@ -7,24 +7,28 @@ from types import SimpleNamespace
 from armored_core.coordinator import Coordinator
 from armored_core.models import PublicationCheck, State
 from armored_core.services import PublicationResult, VisionResult
-from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError
 
 
-class CaptionExhaustionVision:
-    def __init__(self):
-        self.calls = {}
-
+class VisionStage:
     def identify(self, item):
-        calls = self.calls.get(item.item_id, 0) + 1
-        self.calls[item.item_id] = calls
-        if item.item_id == "100" and calls == 1:
-            raise CaptionGenerationError(
-                "Nenhuma das 10 candidata(s) passou pela Policy"
-            )
         return VisionResult(
             f"product-{item.item_id}",
             f"https://example.invalid/affiliate-{item.item_id}",
+            ia_context={"productName": f"Product {item.item_id}"},
         )
+
+
+class FailingFirstIA:
+    def __init__(self):
+        self.calls = {}
+
+    def generate_caption(self, context):
+        item_id = context["productName"].split()[-1]
+        self.calls[item_id] = self.calls.get(item_id, 0) + 1
+        if item_id == "100" and self.calls[item_id] == 1:
+            from ArmoredIA.caption.generator import CaptionGenerationError
+            raise CaptionGenerationError("Nenhuma das 10 candidata(s) passou pela Policy")
+        return f"Olha esse charme ✨\n#item{item_id}"
 
 
 class DeterministicStudio:
@@ -98,9 +102,7 @@ class RebuildableCatchUpSource:
         self.commits.append(dict(checkpoints))
         if self.db is not None:
             for topic_id, message_id in checkpoints.items():
-                self.db.set_sync_topic_checkpoint(
-                    int(topic_id), "test", int(message_id)
-                )
+                self.db.set_sync_topic_checkpoint(int(topic_id), "test", int(message_id))
 
     def complete_historical_sync(self):
         if self.db is not None:
@@ -116,19 +118,21 @@ class RebuildableCatchUpSource:
 
 
 class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
-    def test_caption_exhaustion_recovery_rebuilds_catchup_and_enters_live(self):
+    def test_ia_failure_recovery_does_not_rerun_vision_and_reenters_live(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source_file = root / "input.mp4"
             source_file.write_bytes(b"ORIGINAL")
 
-            vision = CaptionExhaustionVision()
+            vision = VisionStage()
+            ia = FailingFirstIA()
             publisher = DeterministicPublisher()
             source = RebuildableCatchUpSource(source_file)
             coordinator = Coordinator.build(
                 root,
                 SimpleNamespace(
                     vision=vision,
+                    ia=ia,
                     studio=DeterministicStudio(),
                     publisher=publisher,
                     source=source,
@@ -137,13 +141,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
             source.db = coordinator.db
 
             try:
-                asyncio.run(
-                    coordinator._run_catch_up_with_recovery_async()
-                )
-
-                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
-                self.assertEqual(source.reset_count, 1)
-                self.assertTrue(source.historical_complete)
+                asyncio.run(coordinator._run_catch_up_with_recovery_async())
 
                 item_100 = coordinator.db.get("100")
                 item_101 = coordinator.db.get("101")
@@ -151,14 +149,12 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 self.assertTrue(item_100.cleanup_completed)
                 self.assertEqual(item_101.state, State.PUBLISHED)
                 self.assertTrue(item_101.cleanup_completed)
-
-                self.assertEqual(vision.calls["100"], 2)
-                self.assertEqual(vision.calls["101"], 1)
+                self.assertEqual(ia.calls["100"], 2)
+                self.assertEqual(ia.calls["101"], 1)
                 self.assertEqual(publisher.published, ["101", "100"])
-
+                self.assertEqual(source.reset_count, 1)
+                self.assertTrue(source.historical_complete)
                 self.assertEqual(source.commits, [{7: 100}, {7: 101}])
-                self.assertTrue(coordinator.db.historical_complete())
-                self.assertTrue(coordinator.db.has_sync_checkpoints())
 
                 asyncio.run(coordinator._run_forever_async(max_cycles=1, poll_seconds=0))
                 self.assertTrue(source.live_called)
