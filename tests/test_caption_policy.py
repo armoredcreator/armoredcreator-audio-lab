@@ -62,7 +62,8 @@ def test_policy_blocks_only_hard_leaks():
             )
 
 
-def test_provider_makes_one_request_and_returns_up_to_ten():
+def test_provider_makes_one_request_and_returns_up_to_ten(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "configured")
     calls = {"count": 0}
 
     class Response:
