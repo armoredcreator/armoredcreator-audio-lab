@@ -308,12 +308,14 @@ class EndToEndRecoveryTests(unittest.TestCase):
                             "local",
                             original_url="https://example.invalid/product",
                         )
-                    return SourceMessage(
-                        self.path,
-                        "e2e-501",
-                        "local",
-                        original_url="https://example.invalid/product",
-                    )
+                    if self.calls == 2:
+                        return SourceMessage(
+                            self.path,
+                            "e2e-501",
+                            "local",
+                            original_url="https://example.invalid/product",
+                        )
+                    return None
 
             catch_up_source = CatchUpSource(source_file)
             coordinator.source = catch_up_source
@@ -336,10 +338,15 @@ class EndToEndRecoveryTests(unittest.TestCase):
 
             processed = __import__("asyncio").run(coordinator.run_catch_up_async())
 
-            self.assertEqual(processed, [str(item_id)])
-            self.assertEqual(catch_up_source.calls, 1)
-            self.assertEqual(recovery_calls, [str(item_id)])
+            # CATCH-UP must finish its historical scan before the separate
+            # Recovery phase. An unresolved RECOVERY item blocks checkpoint
+            # advancement, but does not prevent later candidates from being
+            # scanned in the same CATCH-UP pass.
+            self.assertEqual(processed, [str(item_id), "e2e-501"])
+            self.assertEqual(catch_up_source.calls, 3)
+            self.assertEqual(recovery_calls, [])
             self.assertEqual(coordinator.db.get(item_id).state, State.RECOVERY)
+            self.assertEqual(coordinator.db.get("e2e-501").state, State.RECOVERY)
             coordinator.close()
 
 
