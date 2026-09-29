@@ -14,9 +14,9 @@ def criar_logger():
         return logger
     fh = logging.FileHandler(_LOG_FILE, encoding="utf-8")
     ch = logging.StreamHandler()
-    fh.setLevel(logging.DEBUG); ch.setLevel(logging.INFO)
+    fh.setLevel(logging.DEBUG); ch.setLevel(logging.WARNING)
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fh.setFormatter(fmt); ch.setFormatter(fmt)
-    logger.addHandler(fh); logger.addHandler(ch)
+    logger.addHandler(fh); logger.addHandler(ch); logger.propagate = False
     return logger
 log = criar_logger()
