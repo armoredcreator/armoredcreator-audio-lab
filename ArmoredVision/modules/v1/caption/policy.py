@@ -150,7 +150,7 @@ def validate_caption(
     # Gemini may insert a line break between words even when the caption is
     # semantically a single 2–3 word sentence. Treat all whitespace as
     # presentation and normalize it before validating the word count.
-    main = re.sub(r"\\s+", " ", main_text).strip()
+    main = re.sub(r"\s+", " ", main_text).strip()
     if not main:
         raise CaptionPolicyError("texto principal vazio")
     words = WORD_RE.findall(EMOJI_RE.sub("", main))
