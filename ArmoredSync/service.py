@@ -200,6 +200,16 @@ class TelegramSource:
     def mark_materialization_failed(self) -> None:
         self._historical_materialization_failed = True
 
+    def reset_historical_scan(self) -> None:
+        """Rebuild the in-memory historical iterator after durable recovery progress."""
+        self._topic_iterator = None
+        self._historical_materialization_failed = False
+        self._historical_scan_exhausted = False
+        self._historical_limit_reached = False
+        self._historical_candidates_emitted = 0
+        self._historical_checkpoints.clear()
+        self._seen.clear()
+
     def _catchup_limit_before_candidate(self) -> bool:
         if self._historical_limit is None:
             return False
@@ -379,7 +389,9 @@ class TelegramSource:
     async def fetch_next_async(self) -> SyncMessage | None:
         if self.is_historical_complete():
             return None
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
@@ -484,7 +496,9 @@ class TelegramSource:
         if self.is_historical_complete():
             return
 
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
@@ -567,7 +581,9 @@ class TelegramSource:
         if self.is_historical_complete():
             return [], {}
 
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
@@ -645,7 +661,9 @@ class TelegramSource:
 
     async def fetch_live_batch_async(self, limit: int | None = None) -> tuple[list[SyncMessage], dict[int, int]]:
         """Discover all new candidates since the persisted topic checkpoints."""
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
@@ -710,7 +728,9 @@ class TelegramSource:
         two messages after the persisted checkpoint so the video + following
         Shopee URL association remains deterministic.
         """
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
@@ -787,7 +807,7 @@ class TelegramSource:
         old backlog from being reinterpreted as LIVE after a certification
         cutoff. Normal production CATCH-UP behavior is unchanged.
         """
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075").strip()
+        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
