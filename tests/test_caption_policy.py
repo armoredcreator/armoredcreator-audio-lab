@@ -5,7 +5,7 @@ import unittest
 
 import requests
 
-from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError, CaptionGenerator
+from ArmoredVision.modules.v1.caption.generator import CaptionGenerationError, CaptionGenerator, CaptionTransportError
 from ArmoredVision.modules.v1.caption.policy import CaptionPolicyError, validate_caption
 
 
@@ -149,24 +149,70 @@ class CaptionPolicyTests(unittest.TestCase):
         self.assertIn("Não copie o título completo", prompt_text)
         self.assertIn("As hashtags devem ser específicas", prompt_text)
         self.assertEqual(captured["timeout"], 90)
-    def test_generator_does_not_fallback_when_gemini_returns_invalid_caption(self):
+    def test_generator_selects_first_policy_valid_candidate_from_single_response(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        os.environ["GEMINI_API_KEY"] = "configured-but-invalid-response"
-        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "2"
+        os.environ["GEMINI_API_KEY"] = "configured"
+        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "3"
         os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"
+
+        calls = {"count": 0}
 
         class Response:
             def raise_for_status(self):
                 return None
 
             def json(self):
-                return {"candidates": [{"content": {"parts": [{"text": "Compre agora 🔥\\n#oferta #promo"}]}}]}
+                return {
+                    "captions": [
+                        "Compre agora 🔥\\n#oferta #promo",
+                        "Batom matte ✨\\n#beleza",
+                        "Olha esse charme ✨\\n#beleza",
+                    ]
+                }
+
+        def requester(*args, **kwargs):
+            calls["count"] += 1
+            return Response()
+
+        caption = CaptionGenerator(requester=requester).generate({
+            "productName": "Batom Matte Vermelho",
+            "category_name": "beleza",
+        })
+
+        self.assertEqual(calls["count"], 1)
+        self.assertEqual(caption, "Olha esse charme ✨\\n#beleza")
+
+    def test_generator_does_not_retry_when_all_candidates_fail_policy(self):
+        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
+        os.environ["GEMINI_API_KEY"] = "configured-but-invalid-response"
+        os.environ["ARMORED_CAPTION_MAX_ATTEMPTS"] = "3"
+        os.environ["ARMORED_CAPTION_RETRY_DELAY"] = "0"
+
+        calls = {"count": 0}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "captions": [
+                        "Compre agora 🔥\\n#oferta #promo",
+                        "Garanta já ✨\\n#beleza",
+                    ]
+                }
+
+        def requester(*args, **kwargs):
+            calls["count"] += 1
+            return Response()
 
         with self.assertRaises(CaptionGenerationError):
-            CaptionGenerator(requester=lambda *args, **kwargs: Response()).generate({
+            CaptionGenerator(requester=requester).generate({
                 "productName": "Batom Matte Vermelho",
                 "category_name": "beleza",
             })
+
+        self.assertEqual(calls["count"], 1)
 
     def test_generator_retries_until_gemini_returns_valid_caption(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
