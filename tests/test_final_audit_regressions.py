@@ -124,9 +124,9 @@ class AuditRegressionTests(unittest.TestCase):
                 if self.scan == 3:
                     return None
                 if self.scan == 4:
-                    return self._message("first")
+                    return self._message("503")
                 if self.scan == 5:
-                    return self._message("second")
+                    return self._message("504")
                 return None
 
             @staticmethod
@@ -168,7 +168,7 @@ class AuditRegressionTests(unittest.TestCase):
                 if item.state == State.RECOVERY:
                     self.db.transition(item.item_id, State.PUBLISHED, "recovered")
                     self.db.mark_cleanup_completed(item.item_id)
-                    return ["first"]
+                    return ["503"]
                 return []
 
         with tempfile.TemporaryDirectory() as td:
