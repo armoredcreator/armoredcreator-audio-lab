@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 from typing import Any, Callable
@@ -52,7 +53,17 @@ class CaptionTransportError(CaptionGenerationError):
 
 
 def _candidate_texts(data: dict[str, Any]) -> list[str]:
-    raw = data.get("captions")
+    try:
+        generated_text = (
+            data["candidates"][0]["content"]["parts"][0]["text"]
+        )
+        payload = json.loads(str(generated_text))
+    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CaptionTransportError(
+            "Gemini não retornou JSON estruturado de candidatas"
+        ) from exc
+
+    raw = payload.get("captions") if isinstance(payload, dict) else None
     if not isinstance(raw, list):
         raise CaptionTransportError("Gemini não retornou a lista de candidatas")
     candidates: list[str] = []
@@ -171,7 +182,7 @@ A lista pode ter até 10 opções. Não inclua explicações, markdown ou campos
             except requests.RequestException:
                 pass
 
-        attempts = max(1, int(os.getenv("ARMORED_CAPTION_MAX_ATTEMPTS", "3")))
+        attempts = max(1, int(os.getenv("ARMORED_CAPTION_MAX_ATTEMPTS", "5")))
         retry_delay = max(0.0, float(os.getenv("ARMORED_CAPTION_RETRY_DELAY", "2")))
         last_transport_error: Exception | None = None
 
