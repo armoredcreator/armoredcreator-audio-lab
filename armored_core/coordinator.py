@@ -275,7 +275,7 @@ class Coordinator:
                     # (for example when a test binding or integration records
                     # the state directly). RECOVERY still blocks checkpoint
                     # advancement, but must not abort the historical scan.
-                    if current.state == State.RECOVERY:
+                    if current.state in (State.RECOVERY, State.WAITING_VISION):
                         checkpoint_blocked = True
                         processed.append(item_id)
                         continue
