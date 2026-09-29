@@ -324,6 +324,30 @@ class ArmoredHub:
                         if message_id:
                             exact_matches.append(message_id)
 
+                # Final reconciliation fallback: inspect recent unscoped history
+                # and validate the topic locally. Telegram forum replies may expose
+                # incomplete reply metadata, and server-side text search can omit
+                # messages containing URLs. Recent history is the durable evidence
+                # path when the message is present but neither scoped query finds it.
+                recent_limit = int(os.getenv("ARMORED_TELEGRAM_VERIFY_RECENT_LIMIT", "200"))
+                async for message in client.iter_messages(
+                    entity,
+                    limit=recent_limit,
+                ):
+                    if self._telegram_publication_matches(
+                        message,
+                        item,
+                        int(topic_id),
+                        topic_scoped=False,
+                    ):
+                        message_id = str(getattr(message, "id", ""))
+                        if message_id:
+                            exact_matches.append(message_id)
+
+                exact_matches = sorted(set(exact_matches))
+                if exact_matches:
+                    return exact_matches
+
                 # Keep the raw API search as a second independent fallback for
                 # installations where iter_messages(search=...) behaves differently.
                 if not exact_matches:
