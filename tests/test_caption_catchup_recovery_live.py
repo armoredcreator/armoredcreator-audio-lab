@@ -132,7 +132,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                     coordinator._run_catch_up_with_recovery_async()
                 )
 
-                self.assertEqual(coordinator._last_catch_up_completed_count, 2)
+                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
                 self.assertEqual(source.reset_count, 1)
                 self.assertTrue(source.historical_complete)
 
