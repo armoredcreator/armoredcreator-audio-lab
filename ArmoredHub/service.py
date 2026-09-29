@@ -80,11 +80,16 @@ class ArmoredHub:
                 if attempt < attempts and delay:
                     time.sleep(delay)
                     continue
-                # No exact Telegram evidence was found after all
-                # verification passes. Treat the publication as ABSENT so
-                # recovery can discard all derived artifacts and rebuild from
-                # the immutable ORIGINAL. UNKNOWN remains reserved for an
-                # inconclusive verification operation (None/error).
+                # Once an external send has started, absence of
+                # Telegram evidence is not proof that the publication did not
+                # happen. Keep the item UNKNOWN so recovery cannot republish
+                # through an unresolved external side-effect window.
+                if send_started:
+                    print(
+                        f"[HUB][VERIFY][UNKNOWN] item={item.content_id} "
+                        "send already started; no exact Telegram evidence"
+                    )
+                    return PublicationCheck.UNKNOWN
                 return PublicationCheck.ABSENT
 
             print(
@@ -244,12 +249,11 @@ class ArmoredHub:
         allow_unknown_topic: bool = False,
     ) -> bool:
         """Require exact publication text/media and, when available, the expected topic."""
-        if not topic_scoped:
-            message_topic = self._topic_id(message)
-            if message_topic is not None and message_topic != int(topic_id):
-                return False
-            if message_topic is None and not allow_unknown_topic:
-                return False
+        message_topic = self._topic_id(message)
+        if message_topic is not None and message_topic != int(topic_id):
+            return False
+        if message_topic is None and not (topic_scoped or allow_unknown_topic):
+            return False
 
         caption = str(getattr(message, "message", "") or "").strip()
         if caption != self._publication_text(item):
