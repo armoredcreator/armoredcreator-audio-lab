@@ -269,6 +269,15 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
+                    # A pipeline may durably enter RECOVERY without raising
+                    # (for example when a test binding or integration records
+                    # the state directly). RECOVERY still blocks checkpoint
+                    # advancement, but must not abort the historical scan.
+                    if current.state == State.RECOVERY:
+                        checkpoint_blocked = True
+                        processed.append(item_id)
+                        continue
+
                     if (
                         current.state == State.PUBLISHED
                         and current.cleanup_completed
