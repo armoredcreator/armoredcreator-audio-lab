@@ -144,6 +144,7 @@ class AuditRegressionTests(unittest.TestCase):
 
             def reset_historical_scan(self):
                 self.reset_calls += 1
+                self.scan = 3
 
             def mark_ingested(self, _message_id):
                 pass
