@@ -16,11 +16,7 @@ class _Generator:
 
 def test_armored_ia_dispatches_caption_without_knowing_gemini():
     generator = _Generator()
-    ia = ArmoredIA(caption_generator=type(
-        "CaptionGeneratorStub",
-        (),
-        {"generate": generator.generate},
-    )())
+    ia = ArmoredIA(caption_generator=generator)
 
     assert ia.run("caption", {"productName": "Produto"}) == "Olha isso ✨\n#casa"
     assert generator.calls == 1
