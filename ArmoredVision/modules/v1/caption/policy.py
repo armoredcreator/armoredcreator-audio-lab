@@ -147,15 +147,12 @@ def validate_caption(
     # validated hashtags first, then validate the remaining text as exactly
     # one main line.
     main_text = HASHTAG_RE.sub("", text)
-    main_lines = [
-        re.sub(r"\\s+", " ", line).strip()
-        for line in main_text.splitlines()
-        if line.strip()
-    ]
-    if len(main_lines) != 1:
-        raise CaptionPolicyError("texto principal deve ocupar uma única linha")
-
-    main = main_lines[0]
+    # Gemini may insert a line break between words even when the caption is
+    # semantically a single 2–3 word sentence. Treat all whitespace as
+    # presentation and normalize it before validating the word count.
+    main = re.sub(r"\\s+", " ", main_text).strip()
+    if not main:
+        raise CaptionPolicyError("texto principal vazio")
     words = WORD_RE.findall(EMOJI_RE.sub("", main))
     if not 2 <= len(words) <= 3:
         raise CaptionPolicyError("texto principal deve conter 2 ou 3 palavras")
