@@ -95,6 +95,9 @@ def test_publish_telegram_reconciles_timeout_without_republishing(monkeypatch, t
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
 
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
+
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
     item = _item(output)
@@ -161,6 +164,9 @@ def test_publish_telegram_raises_publication_unknown_on_unresolved_timeout(monke
     monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
+
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
 
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
@@ -243,6 +249,9 @@ def test_publish_telegram_passes_real_video_metadata_to_send_video(monkeypatch, 
     monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
+
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
 
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
