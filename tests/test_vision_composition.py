@@ -4,6 +4,7 @@ import os
 import unittest
 
 from ArmoredVision.service import ArmoredVision
+from ArmoredVision.modules.v1.caption.generator import CaptionTransportError
 
 
 PRODUCT = {
@@ -91,6 +92,30 @@ def test_caption_is_composed_after_v1_without_changing_v1(monkeypatch):
 class VisionCompositionTests(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("ARMORED_CAPTION_ENABLED", None)
+
+
+    def test_caption_transport_exhaustion_maps_to_technical_recovery(self):
+        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
+
+        class TransportFailingCaption:
+            def generate(self, product):
+                raise CaptionTransportError("Gemini indisponível após retries")
+
+        vision = ArmoredVision(
+            api=V1FakeAPI(),
+            caption_generator=TransportFailingCaption(),
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            vision.identify(
+                type(
+                    "ItemStub",
+                    (),
+                    {"original_url": "https://shopee.com.br/product/456/123"},
+                )()
+            )
+
+        self.assertIn("Caption Gemini indisponível", str(ctx.exception))
 
     def test_caption_runtime_failure_maps_to_waiting_vision(self):
         os.environ["ARMORED_CAPTION_ENABLED"] = "1"
