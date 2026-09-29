@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import os
-
 from armored_core.models import Item
 from armored_core.services import VisionResult, VisionUnresolvedError
 
 from .modules.v1.shopee_api import ShopeeAffiliateAPI, ShopeeProductNotFoundError
 from .modules.v1.shopee_resolver import resolve_short_url
-from .modules.v1.caption.generator import CaptionGenerator, CaptionGenerationError, CaptionTransportError
 
 
 class ArmoredVision:
@@ -20,6 +17,20 @@ class ArmoredVision:
     def __init__(self, api=None, caption_generator=None):
         self.api = api
         self.caption_generator = caption_generator
+
+    @staticmethod
+    def _ia_context(product: dict) -> dict:
+        keys = (
+            "productName", "itemId", "shopId", "shopName", "productCatIds",
+            "priceMin", "priceMax", "sales", "ratingStar", "brand",
+            "brandName", "model", "modelName", "description", "attributes",
+            "technicalCharacteristics", "imageUrl",
+        )
+        return {
+            key: product[key]
+            for key in keys
+            if key in product and product[key] not in (None, "", [], {})
+        }
 
     def identify(self, item: Item) -> VisionResult:
         original = (item.original_url or "").strip()
@@ -47,27 +58,6 @@ class ArmoredVision:
             or product.get("itemId")
             or f"{resolved.shop_id}_{resolved.item_id}"
         )
-
-        publication_caption = None
-        if os.getenv("ARMORED_CAPTION_ENABLED", "0") == "1":
-            try:
-                generator = self.caption_generator or CaptionGenerator()
-                publication_caption = generator.generate(product)
-            except CaptionTransportError as exc:
-                # Gemini/API transport exhaustion is a technical processing
-                # failure. Let Pipeline persist it as RECOVERY rather than
-                # misclassifying it as Vision product resolution failure.
-                raise RuntimeError(f"Caption Gemini indisponível: {exc}") from exc
-            except CaptionGenerationError:
-                # Gemini returned candidates, but none passed local Policy.
-                # This is a processing failure, not product-resolution
-                # uncertainty. Let Pipeline persist RECOVERY so the same item
-                # can be retried after the historical scan.
-                raise
-            except Exception:
-                # Unexpected programming/configuration failures are technical
-                # pipeline failures. Do not misclassify them as WAITING_VISION.
-                raise
 
         return VisionResult(
             identifier,
