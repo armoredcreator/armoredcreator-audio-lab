@@ -7,7 +7,7 @@ from armored_core.services import VisionResult, VisionUnresolvedError
 
 from .modules.v1.shopee_api import ShopeeAffiliateAPI, ShopeeProductNotFoundError
 from .modules.v1.shopee_resolver import resolve_short_url
-from .modules.v1.caption.generator import CaptionGenerator, CaptionGenerationError
+from .modules.v1.caption.generator import CaptionGenerator, CaptionGenerationError, CaptionTransportError
 
 
 class ArmoredVision:
@@ -53,7 +53,15 @@ class ArmoredVision:
             try:
                 generator = self.caption_generator or CaptionGenerator()
                 publication_caption = generator.generate(product)
+            except CaptionTransportError as exc:
+                # Gemini/API transport exhaustion is a technical processing
+                # failure. Let Pipeline persist it as RECOVERY rather than
+                # misclassifying it as Vision product resolution failure.
+                raise RuntimeError(f"Caption Gemini indisponível: {exc}") from exc
             except CaptionGenerationError as exc:
+                # A valid Gemini response whose candidates all fail the local
+                # Policy is a Vision/Caption functional boundary, not a
+                # transport outage.
                 raise VisionUnresolvedError(str(exc)) from exc
             except Exception as exc:
                 raise VisionUnresolvedError(
