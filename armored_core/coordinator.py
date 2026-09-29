@@ -20,12 +20,12 @@ from .storage import Storage
 class Coordinator:
     """Single composition root for the isolated ArmoredCreator pipeline."""
 
-    def __init__(self, db, storage, vision, studio, publisher, source=None):
+    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
         self.db = db
         self.storage = storage
         self.sync = SyncService(db, storage)
-        self.pipeline = Pipeline(db, storage, vision, studio, publisher)
-        self.recovery = Recovery(db, storage, vision, studio, publisher)
+        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
+        self.recovery = Recovery(db, storage, vision, studio, publisher, ia)
         self.startup_reconciler = StartupReconciler(db, storage, publisher)
         self.source = source
         self._runtime_lock_held = False
@@ -55,9 +55,11 @@ class Coordinator:
             from ArmoredHub.service import ArmoredHub
             from ArmoredStudio.service import ArmoredStudio
             from ArmoredVision.service import ArmoredVision
+            from ArmoredIA.service import ArmoredIA
             from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource
 
             vision = ArmoredVision()
+            ia = ArmoredIA()
             studio = ArmoredStudio(storage.root)
             publisher = ArmoredHub(storage.root, db)
             if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
@@ -69,8 +71,8 @@ class Coordinator:
                 source = TelegramSource(storage.root, reader, db)
             else:
                 source = LocalSource(storage.root / "input")
-            return cls(db, storage, vision, studio, publisher, source)
-        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source)
+            return cls(db, storage, vision, studio, publisher, source, ia)
+        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source, getattr(bindings, "ia", None))
 
     async def _ensure_source_connection(self) -> None:
         """Reconnect a real Telegram source before materializing the next item."""
@@ -710,7 +712,7 @@ class Coordinator:
 
     def recover_pending(self):
         states = (
-            State.RECEIVED.value, State.VISION.value,
+            State.RECEIVED.value, State.VISION.value, State.IA.value,
             State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
             State.FAILED.value, State.PUBLISHED.value,
         )
