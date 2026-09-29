@@ -47,7 +47,7 @@ def main() -> int:
         logging.info("Modo SQLite: %s", coordinator.db.sync_mode())
         logging.info("Sync real Telegram: %s", os.getenv("ARMORED_REAL_TELEGRAM"))
         logging.info("Hub dry-run efetivo: %s", os.getenv("ARMORED_HUB_DRY_RUN", "0"))
-        logging.info("Fonte Sync: %s", os.getenv("ARMORED_SYNC_SOURCE") or "-1003788989075")
+        logging.info("Fonte Sync: %s", os.getenv("ARMORED_SYNC_SOURCE") or "<não configurada>")
         max_cycles_raw = os.getenv("ARMORED_MAX_CYCLES")
         max_cycles = int(max_cycles_raw) if max_cycles_raw else None
         coordinator.run_forever(
