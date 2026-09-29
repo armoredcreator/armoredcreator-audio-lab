@@ -61,6 +61,7 @@ class RebuildableCatchUpSource:
         self.commits = []
         self.historical_complete = False
         self.live_called = False
+        self.db = None
 
     def _message(self, item_id):
         return SimpleNamespace(
@@ -95,8 +96,15 @@ class RebuildableCatchUpSource:
 
     def commit_live_checkpoints(self, checkpoints):
         self.commits.append(dict(checkpoints))
+        if self.db is not None:
+            for topic_id, message_id in checkpoints.items():
+                self.db.set_sync_topic_checkpoint(
+                    int(topic_id), "test", int(message_id)
+                )
 
     def complete_historical_sync(self):
+        if self.db is not None:
+            self.db.complete_historical_sync()
         self.historical_complete = True
 
     def is_historical_complete(self):
@@ -126,6 +134,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                     source=source,
                 ),
             )
+            source.db = coordinator.db
 
             try:
                 asyncio.run(
@@ -149,6 +158,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
 
                 self.assertEqual(source.commits, [{7: 100}, {7: 101}])
                 self.assertTrue(coordinator.db.historical_complete())
+                self.assertTrue(coordinator.db.has_sync_checkpoints())
 
                 asyncio.run(coordinator._run_forever_async(max_cycles=1, poll_seconds=0))
                 self.assertTrue(source.live_called)
