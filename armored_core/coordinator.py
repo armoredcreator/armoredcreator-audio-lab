@@ -726,10 +726,13 @@ class Coordinator:
                 self.recover(item_id)
                 current = self.db.get(item_id)
                 recovered.append(item_id)
-                if current.state in (State.WAITING_VISION, State.RECOVERY):
-                    # Startup recovery is ordered. An unresolved current item
-                    # blocks progression to later candidates for the same reason
-                    # CATCH-UP is blocked: its checkpoint must remain authoritative.
+                if (
+                    current.state in (State.WAITING_VISION, State.RECOVERY)
+                    or (current.state == State.PUBLISHED and not current.cleanup_completed)
+                ):
+                    # Startup recovery is ordered. An unresolved current item,
+                    # including PUBLISHED with cleanup still pending, blocks
+                    # progression because its durable lifecycle is incomplete.
                     break
             except Exception as exc:
                 import logging
@@ -740,9 +743,12 @@ class Coordinator:
                     current.state.value,
                     exc,
                 )
-                if current.state in (State.WAITING_VISION, State.RECOVERY):
+                if (
+                    current.state in (State.WAITING_VISION, State.RECOVERY)
+                    or (current.state == State.PUBLISHED and not current.cleanup_completed)
+                ):
                     # The current candidate still owns the checkpoint. Never
                     # continue startup recovery with a later item while this
-                    # candidate remains unresolved.
+                    # candidate remains unresolved or cleanup-pending.
                     break
         return recovered
