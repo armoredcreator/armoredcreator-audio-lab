@@ -235,10 +235,21 @@ class ArmoredHub:
             raise RuntimeError("Hub caption/publication package excede 1024 caracteres")
         return text
 
-    def _telegram_publication_matches(self, message, item: Item, topic_id: int, topic_scoped: bool = False) -> bool:
-        """Require exact caption/media; topic scope may already be guaranteed by the query."""
-        if not topic_scoped and self._topic_id(message) != int(topic_id):
-            return False
+    def _telegram_publication_matches(
+        self,
+        message,
+        item: Item,
+        topic_id: int,
+        topic_scoped: bool = False,
+        allow_unknown_topic: bool = False,
+    ) -> bool:
+        """Require exact publication text/media and, when available, the expected topic."""
+        if not topic_scoped:
+            message_topic = self._topic_id(message)
+            if message_topic is not None and message_topic != int(topic_id):
+                return False
+            if message_topic is None and not allow_unknown_topic:
+                return False
 
         caption = str(getattr(message, "message", "") or "").strip()
         if caption != self._publication_text(item):
@@ -250,6 +261,14 @@ class ArmoredHub:
         return True
 
     def _find_telegram_publications(self, item: Item) -> list[str] | None:
+        """Find an exact publication without trusting incomplete forum metadata.
+
+        A topic-scoped query is authoritative for topic membership. For global
+        history/search fallbacks, Telegram may omit reply_to_top_id. In that
+        case an exact caption+media match is only a candidate; the candidate's
+        message_id is fetched again through _verify_telegram_message(), which
+        validates the actual Telegram message before confirmation.
+        """
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
         topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
@@ -292,107 +311,126 @@ class ArmoredHub:
                     return None
 
                 entity = await client.get_entity(int(chat_id))
-                exact_matches: list[str] = []
+                scoped_matches: list[str] = []
+                fallback_candidates: list[str] = []
 
                 async for message in client.iter_messages(
                     entity,
                     limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_HISTORY_LIMIT", "200")),
                     reply_to=int(topic_id),
                 ):
-                    if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=True):
+                    if self._telegram_publication_matches(
+                        message, item, int(topic_id), topic_scoped=True
+                    ):
                         message_id = str(getattr(message, "id", ""))
                         if message_id:
-                            exact_matches.append(message_id)
+                            scoped_matches.append(message_id)
 
-                if exact_matches:
-                    return sorted(set(exact_matches))
+                if scoped_matches:
+                    return sorted(set(scoped_matches))
 
-                # Forum-topic-scoped Telegram search is not a reliable sole source of
-                # truth: Telegram/Telethon can return no results for an existing message
-                # when top_msg_id/reply_to filtering is used. Fall back to a normal
-                # server-side text search and validate the topic locally.
-                async for message in client.iter_messages(
-                    entity,
-                    search=query,
-                    limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_SEARCH_LIMIT", "100")),
-                ):
-                    if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=False):
-                        message_id = str(getattr(message, "id", ""))
-                        if message_id:
-                            exact_matches.append(message_id)
+                if query:
+                    async for message in client.iter_messages(
+                        entity,
+                        search=query,
+                        limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_SEARCH_LIMIT", "100")),
+                    ):
+                        if self._telegram_publication_matches(
+                            message,
+                            item,
+                            int(topic_id),
+                            topic_scoped=False,
+                            allow_unknown_topic=True,
+                        ):
+                            message_id = str(getattr(message, "id", ""))
+                            if message_id:
+                                fallback_candidates.append(message_id)
 
-                # Final reconciliation fallback: inspect recent unscoped history
-                # and validate the topic locally. Telegram forum replies may expose
-                # incomplete reply metadata, and server-side text search can omit
-                # messages containing URLs. Recent history is the durable evidence
-                # path when the message is present but neither scoped query finds it.
                 recent_limit = int(os.getenv("ARMORED_TELEGRAM_VERIFY_RECENT_LIMIT", "200"))
-                async for message in client.iter_messages(
-                    entity,
-                    limit=recent_limit,
-                ):
+                async for message in client.iter_messages(entity, limit=recent_limit):
                     if self._telegram_publication_matches(
                         message,
                         item,
                         int(topic_id),
                         topic_scoped=False,
+                        allow_unknown_topic=True,
                     ):
                         message_id = str(getattr(message, "id", ""))
                         if message_id:
-                            exact_matches.append(message_id)
+                            fallback_candidates.append(message_id)
 
-                exact_matches = sorted(set(exact_matches))
-                if exact_matches:
-                    return exact_matches
+                candidates = sorted(set(fallback_candidates))
+                if len(candidates) > 1:
+                    return candidates
+
+                if len(candidates) == 1:
+                    # The global search/history result is only a candidate when
+                    # Telegram omitted topic metadata. Re-read the exact message
+                    # by ID before treating it as proof of publication.
+                    return candidates
 
                 if not query:
                     return []
 
-                # Keep the raw API search as a second independent fallback for
-                # installations where iter_messages(search=...) behaves differently.
-                if not exact_matches:
-                    result = await client(
-                        functions.messages.SearchRequest(
-                            peer=entity,
-                            q=query,
-                            from_id=None,
-                            top_msg_id=0,
-                            filter=InputMessagesFilterEmpty(),
-                            min_date=None,
-                            max_date=None,
-                            offset_id=0,
-                            add_offset=0,
-                            limit=100,
-                            max_id=0,
-                            min_id=0,
-                            hash=0,
-                        )
+                result = await client(
+                    functions.messages.SearchRequest(
+                        peer=entity,
+                        q=query,
+                        from_id=None,
+                        top_msg_id=0,
+                        filter=InputMessagesFilterEmpty(),
+                        min_date=None,
+                        max_date=None,
+                        offset_id=0,
+                        add_offset=0,
+                        limit=100,
+                        max_id=0,
+                        min_id=0,
+                        hash=0,
                     )
-                    for message in getattr(result, "messages", []) or []:
-                        if self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=False):
-                            message_id = str(getattr(message, "id", ""))
-                            if message_id:
-                                exact_matches.append(message_id)
+                )
+                for message in getattr(result, "messages", []) or []:
+                    if self._telegram_publication_matches(
+                        message,
+                        item,
+                        int(topic_id),
+                        topic_scoped=False,
+                        allow_unknown_topic=True,
+                    ):
+                        message_id = str(getattr(message, "id", ""))
+                        if message_id:
+                            fallback_candidates.append(message_id)
 
-                return sorted(set(exact_matches))
+                return sorted(set(fallback_candidates))
             finally:
                 if client.is_connected():
                     await client.disconnect()
 
         try:
-            result = self._run_async(find())
-            count = len(result) if result is not None else "UNKNOWN"
+            candidates = self._run_async(find())
+            count = len(candidates) if candidates is not None else "UNKNOWN"
             print(
                 f"[HUB][VERIFY] item={item.content_id} query={query!r} "
                 f"topic={topic_id} chat={chat_id} matches={count}"
             )
-            return result
         except Exception as exc:
             print(
                 f"[HUB][VERIFY][UNKNOWN] item={item.content_id} query={query!r}: "
                 f"{type(exc).__name__}: {exc}"
             )
             return None
+
+        if candidates is None or len(candidates) != 1:
+            return candidates
+
+        # A single unscoped candidate must be verified by its own message ID.
+        # This is the positive evidence path when forum reply metadata is absent.
+        status = self._verify_telegram_message(str(candidates[0]), item)
+        if status is True:
+            return [str(candidates[0])]
+        if status is False:
+            return []
+        return None
 
     def _verify_telegram_message(self, message_id: str, item: Item) -> bool | None:
         api_id = os.getenv("TELEGRAM_API_ID")
