@@ -63,11 +63,10 @@ class ArmoredVision:
                 # Policy is a Vision/Caption functional boundary, not a
                 # transport outage.
                 raise VisionUnresolvedError(str(exc)) from exc
-            except Exception as exc:
-                raise VisionUnresolvedError(
-                    f"Caption Generator indisponível: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
+            except Exception:
+                # Unexpected programming/configuration failures are technical
+                # pipeline failures. Do not misclassify them as WAITING_VISION.
+                raise
 
         return VisionResult(
             identifier,
