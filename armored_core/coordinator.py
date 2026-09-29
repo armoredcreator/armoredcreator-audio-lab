@@ -211,6 +211,14 @@ class Coordinator:
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
                     marker(item_id)
+
+                # A previously completed item may be rediscovered after an
+                # earlier candidate was recovered. Its checkpoint is safe to
+                # advance now because this item is durably PUBLISHED+cleanup.
+                topic_id = getattr(message, "topic_id", None)
+                commit = getattr(source, "commit_live_checkpoints", None)
+                if topic_id is not None and commit is not None:
+                    commit({int(topic_id): int(item_id)})
                 continue
 
             materialized = False
@@ -316,10 +324,14 @@ class Coordinator:
                 # The current candidate still owns the historical checkpoint, so
                 # CATCH-UP must stop before asking Sync for another candidate.
                 current = self.db.get(item_id)
-                if current.state in (State.WAITING_VISION, State.RECOVERY):
+                if current.state == State.RECOVERY:
+                    # Technical pipeline failures are durable RECOVERY items,
+                    # but they must not abort the historical scan. The current
+                    # checkpoint remains blocked; later candidates may be
+                    # processed one at a time. A later recovery pass revisits
+                    # this item before LIVE is allowed.
                     processed.append(item_id)
-                    self._last_catch_up_completed_count = completed_count
-                    return processed
+                    continue
 
             # Count only a fully published and cleaned item.
             current = self.db.get(item_id)
@@ -481,6 +493,44 @@ class Coordinator:
         import asyncio
         return asyncio.run(self.run_live_once_async())
 
+    async def _run_catch_up_with_recovery_async(self) -> None:
+        """Run historical processing, then retry technical RECOVERY items.
+
+        A technical failure must not starve the rest of CATCH-UP. Its checkpoint
+        remains blocked, so after the historical scan we reconcile RECOVERY
+        items and, when progress is made, rescan from the durable checkpoint.
+        WAITING_VISION is intentionally not auto-retried here.
+        """
+        while True:
+            await self.run_catch_up_async()
+            if self.db.historical_complete():
+                return
+
+            before = {
+                str(row["content_id"])
+                for row in self.db.conn.execute(
+                    "SELECT content_id FROM items WHERE state=? ORDER BY created_at, content_id",
+                    (State.RECOVERY.value,),
+                ).fetchall()
+            }
+            if not before:
+                return
+
+            self.recover_pending()
+
+            after = {
+                str(row["content_id"])
+                for row in self.db.conn.execute(
+                    "SELECT content_id FROM items WHERE state=? ORDER BY created_at, content_id",
+                    (State.RECOVERY.value,),
+                ).fetchall()
+            }
+
+            # Continue only when at least one technical RECOVERY item was
+            # actually resolved. If none was resolved, avoid a tight retry loop.
+            if before.issubset(after):
+                return
+
     async def _run_forever_async(
         self,
         poll_seconds: float = 2.0,
@@ -506,7 +556,7 @@ class Coordinator:
         ):
             if self.db.historical_complete() and not self.db.has_sync_checkpoints():
                 self.db.set_sync_mode("CATCH_UP")
-            await self.run_catch_up_async()
+            await self._run_catch_up_with_recovery_async()
 
             # A bounded CATCH-UP run remains opt-in certification behavior.
             # By default it terminates here, preserving the existing contract.
