@@ -152,16 +152,23 @@ Arquivos: `ArmoredStudio/service.py`, `unified.py`, `analysis/*`, `processing/*`
 
 Arquivo: `ArmoredHub/service.py`.
 
-- Publicação real no chat `-1004341972306`, topic `228`.
-- Persiste intenção/publication e message ID.
-- Verifica publicação externamente.
-- CONFIRMED → não republica.
-- UNKNOWN → recovery; nunca republica cegamente.
-- Janela pós-envio protegida por persistência e reconciliação.
+Contrato definitivo de publicação e reconciliação:
 
-Execução real recente: 1383 → `CONFIRMED #922`; 706 → `CONFIRMED #923`.
+- SQLite registra a intenção de publicação antes do efeito externo.
+- `CONFIRMED` exige mensagem Telegram válida e nunca republica.
+- `UNKNOWN` é inconclusivo e segue para Recovery; nunca autoriza republicação automática.
+- `SENT_UNVERIFIED` significa que o envio externo já começou. Zero evidência após todas as tentativas permanece `UNKNOWN`, nunca `ABSENT`.
+- Candidato encontrado em busca/histórico global é apenas candidato. Quando existe exatamente um, o Hub reconsulta a mensagem pelo próprio `message_id` antes de confirmar.
+- Metadado de tópico ausente é aceito quando a consulta é topic-scoped ou quando a busca global permite explicitamente metadado desconhecido.
+- Metadado de tópico explicitamente diferente do tópico esperado é sempre rejeitado, inclusive na verificação por `message_id`.
+- Nome de arquivo não é critério de identidade da publicação.
+- Múltiplos matches exatos permanecem `UNKNOWN` para evitar seleção arbitrária.
 
-**Estado: FECHADO/CERTIFICADO.**
+A correção desta branch fecha o risco de republicação após envio ambíguo e separa descoberta de candidato da confirmação por ID.
+
+Execuções reais históricas: 1383 → `CONFIRMED #922`; 706 → `CONFIRMED #923`.
+
+**Estado do código: FECHADO quanto ao contrato de reconciliação. A certificação operacional da branch depende da execução da suíte após esta última alteração.**
 
 ---
 
@@ -189,15 +196,21 @@ Caption V1 e Gemini 3.1 Flash-Lite ficam ativos no launcher real.
 
 ## 10. Testes automatizados
 
-Última suíte local limpa registrada:
+A suíte atual cobre arquitetura, invariantes, SQLite, pipeline, Recovery, startup audit, runtime lock, Sync, CATCH-UP, restart, publicação, confirmação Telegram, reconnect, LIVE polling, RVC, Vision/Studio e Caption.
+
+A última execução registrada antes da correção final do Hub foi:
 
 ```text
-133 passed, 1 skipped, 8 subtests passed
+135 testes executados
+1 falha: test_unscoped_candidate_is_reverified_by_message_id
+134 demais testes passaram
 ```
 
-A cobertura inclui arquitetura, invariantes, SQLite, pipeline, recovery, startup audit, runtime lock, Sync, CATCH-UP, restart, publicação, confirmação Telegram, reconnect, LIVE polling, RVC, Vision/Studio e Caption.
+A falha foi corrigida no código de teste: o teste anterior substituía `_find_telegram_publications()` e, portanto, eliminava justamente a etapa de produção que deveria ser verificada. O teste agora mantém o método real e intercepta somente a fronteira assíncrona de descoberta, validando `candidato 474 → verificação por message_id → CONFIRMED`.
 
-**Estado: VERDE no último run local registrado.**
+A implementação também foi corrigida para preservar `UNKNOWN` quando `SENT_UNVERIFIED` termina sem evidência exata e para rejeitar metadado de tópico explicitamente incompatível.
+
+**Estado: código e testes corrigidos; a suíte não foi reexecutada nesta alteração e este README não declara uma nova execução verde sem evidência.**
 
 ---
 
@@ -223,7 +236,7 @@ A cobertura inclui arquitetura, invariantes, SQLite, pipeline, recovery, startup
 
 ## 12. O que falta para declarar certificação histórica 100%
 
-Existe **um único teste operacional de grande escala pendente**:
+O código de produção e o contrato de reconciliação Telegram estão fechados nesta branch. A certificação histórica 100% continua sendo uma etapa operacional separada:
 
 ```text
 CATCH-UP histórico completo
@@ -235,9 +248,11 @@ CATCH-UP histórico completo
 → entrada automática em LIVE
 ```
 
-Esse teste não exige inserir vídeo manualmente. O Sync deve descobrir os conteúdos existentes na fonte real.
+Essa etapa não exige inserir vídeo manualmente. O Sync deve descobrir os conteúdos existentes na fonte real.
 
-Um novo conteúdo LIVE não pode ser artificialmente injetado porque a fonte pertence a terceiros. Isso é limitação do laboratório, não lacuna da arquitetura.
+A ausência de um novo conteúdo LIVE artificialmente injetável é uma limitação do laboratório, não uma lacuna da arquitetura.
+
+Antes dessa certificação histórica, a suíte automatizada deve ser executada sobre o código final para registrar evidência objetiva da branch.
 
 ---
 
@@ -258,30 +273,24 @@ Um novo conteúdo LIVE não pode ser artificialmente injetado porque a fonte per
 
 ## 14. Congelamento
 
-A branch permanece em fase de certificação. As correções da auditoria de 29/09 são mínimas e estão aguardando a nova execução da suíte automatizada antes do CATCH-UP histórico.
+A branch recebeu o fechamento final do contrato Telegram em 29/09/2026:
+
+- `SENT_UNVERIFIED + zero matches` permanece `UNKNOWN`.
+- Candidato global único é revalidado por `message_id`.
+- Tópico explicitamente incompatível é rejeitado.
+- Metadado de tópico ausente continua aceito somente nos contextos em que a consulta não fornece essa evidência.
+- O teste de reconciliação foi corrigido para exercitar o caminho real de produção.
+
+Essas alterações são mínimas e não reabrem Coordinator, Sync, Vision V1, Caption, Studio ou Core.
+
+A branch ainda não deve ser marcada como certificação operacional final sem a evidência da suíte após a alteração.
 
 Base da versão congelada antes da correção Story:
 ```text
 a345f2fd997d841e1e38f8e4609ed4af7083dd30
 ```
 
-Correção Story integrada na branch congelada pelo PR #29. O commit atual da branch é registrado pelo Git e deve ser usado no CATCH-UP após a validação local.
-
-Depois da nova suíte verde e do CATCH-UP histórico, congelar novamente. Até lá, somente falhas bloqueadoras reproduzidas na certificação justificam novas alterações.
-
-Depois do congelamento:
-
-- não alterar Vision V1;
-- não alterar Caption;
-- não alterar Sync;
-- não alterar Studio;
-- não alterar Hub;
-- não alterar Core;
-- não reintroduzir V2;
-- não introduzir filas;
-- não mudar o contrato de publicação.
-
-Somente uma falha bloqueadora reproduzida no CATCH-UP pode justificar alteração. Qualquer alteração exige nova suíte e nova certificação.
+Correção Story integrada na branch congelada pelo PR #29. Os commits atuais da branch devem ser usados no fechamento final.
 
 ---
 
@@ -302,41 +311,46 @@ Somente uma falha bloqueadora reproduzida no CATCH-UP pode justificar alteraçã
 | ArmoredStudio | ✅ fechado |
 | RVC | ✅ fechado |
 | FFmpeg / Finalizer | ✅ fechado + Story 9:16 |
-| ArmoredHub | ✅ fechado |
-| Telegram publication | ✅ fechado |
-| Confirmation | ✅ fechado |
+| ArmoredHub | ✅ contrato de reconciliação fechado |
+| Telegram publication | ✅ contrato de idempotência fechado |
+| Confirmation | ✅ contrato fechado |
 | Cleanup | ✅ fechado |
 | START_ALL | ✅ fechado |
-| Automated suite | ✅ verde |
+| Automated suite | 🟡 corrigida; execução pós-correção pendente |
 | Vision V2 | 🚫 fora da versão |
-| CATCH-UP histórico ≈308 | ⏳ último teste operacional |
+| CATCH-UP histórico ≈308 | ⏳ certificação operacional |
 | LIVE novo conteúdo | ⏳ não reproduzível artificialmente |
-| Certificação histórica 100% | ⏳ após CATCH-UP |
+| Certificação histórica 100% | ⏳ após suíte + CATCH-UP |
 
 ---
 
 ## 16. Regra operacional final
 
-Até o CATCH-UP histórico completo, o estado correto é:
+O estado técnico desta branch agora é:
 
 ```text
-CÓDIGO
-└── FECHADO / CONGELÁVEL
+CÓDIGO DE PRODUÇÃO
+└── FECHADO quanto ao contrato Telegram/reconciliação
 
-E2E REAL
-└── COMPROVADO
+TESTE DE RECONCILIAÇÃO
+└── CORRIGIDO para exercitar o caminho real
 
-RECOVERY
-└── COMPROVADO
+SENT_UNVERIFIED
+└── ZERO EVIDÊNCIA = UNKNOWN
 
-CAPTION V1 + GEMINI
-└── COMPROVADO
+CANDIDATO GLOBAL ÚNICO
+└── REVALIDAÇÃO OBRIGATÓRIA POR message_id
+
+TÓPICO EXPLÍCITO DIFERENTE
+└── REJEITADO
 
 V2
-└── REMOVIDA
+└── FORA DA VERSÃO
 
-HISTÓRICO ≈308
-└── ÚLTIMA CERTIFICAÇÃO OPERACIONAL
+CATCH-UP ≈308
+└── CERTIFICAÇÃO OPERACIONAL PENDENTE
 ```
 
-Depois que o histórico terminar e o Coordinator entrar em LIVE, registrar o commit exato, contagens finais, checkpoints, órfãos, recoveries e estado final no README. A partir daí, a versão poderá ser marcada como certificação histórica completa.
+A partir deste ponto, não há motivo arquitetural para reabrir Coordinator, Sync, Vision V1, Caption, Studio, Storage ou Core por causa do incidente Telegram.
+
+O próximo marco é exclusivamente de evidência operacional: executar a suíte final, registrar o resultado real e então realizar o CATCH-UP histórico. Se o CATCH-UP concluir com checkpoints, confirmações, cleanup e zero órfãos conforme o contrato, registrar o commit final e congelar a versão.
