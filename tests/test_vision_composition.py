@@ -125,9 +125,7 @@ class VisionCompositionTests(unittest.TestCase):
             caption_generator=FailingCaption(),
         )
 
-        from armored_core.services import VisionUnresolvedError
-
-        with self.assertRaises(VisionUnresolvedError) as ctx:
+        with self.assertRaises(RuntimeError) as ctx:
             vision.identify(
                 type(
                     "ItemStub",
@@ -136,7 +134,7 @@ class VisionCompositionTests(unittest.TestCase):
                 )()
             )
 
-        self.assertIn("Caption Generator indisponível", str(ctx.exception))
+        self.assertIn("gemini-temporarily-unavailable", str(ctx.exception))
 
 
 if __name__ == "__main__":
