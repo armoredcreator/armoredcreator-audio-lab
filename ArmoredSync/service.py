@@ -808,6 +808,8 @@ class TelegramSource:
         cutoff. Normal production CATCH-UP behavior is unchanged.
         """
         source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
