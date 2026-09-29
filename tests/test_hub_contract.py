@@ -125,7 +125,11 @@ class HubContractTests(unittest.TestCase):
                 hub = ArmoredHub(root, db)
 
                 calls = []
-                hub._find_telegram_publications = lambda current: ["474"]
+                # Exercise the real candidate-reconciliation path. The
+                # async Telegram discovery itself is replaced at the boundary,
+                # but _find_telegram_publications must still re-verify the
+                # returned unscoped candidate by message ID.
+                hub._run_async = lambda coroutine: ["474"]
                 hub._verify_telegram_message = (
                     lambda message_id, current: calls.append(message_id) or True
                 )
