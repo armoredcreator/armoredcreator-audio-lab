@@ -112,7 +112,7 @@ class CaptionPolicyTests(unittest.TestCase):
                 return None
 
             def json(self):
-                return {"candidates": [{"content": {"parts": [{"text": "Cantinho profissional ✨\n#barbearia #organizacao"}]}}]}
+                return {"captions": ["Cantinho profissional ✨\n#barbearia #organizacao"]}
 
         def requester(*args, **kwargs):
             captured["json"] = kwargs["json"]
@@ -229,13 +229,10 @@ class CaptionPolicyTests(unittest.TestCase):
 
             def json(self):
                 return {
-                    "candidates": [{
-                        "content": {
-                            "parts": [{
-                                "text": "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao"
-                            }]
-                        }
-                    }]
+                    "captions": [
+                        "Compre agora 🔥\n#oferta #promo",
+                        "Cantinho profissional " + chr(0x2728) + "\n#barbearia #organizacao",
+                    ]
                 }
 
         def requester(*args, **kwargs):
