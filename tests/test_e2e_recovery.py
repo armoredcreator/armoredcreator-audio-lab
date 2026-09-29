@@ -378,12 +378,14 @@ class EndToEndRecoveryTests(unittest.TestCase):
                             "local",
                             original_url="https://example.invalid/product",
                         )
-                    return SourceMessage(
-                        self.path,
-                        "e2e-503",
-                        "local",
-                        original_url="https://example.invalid/product",
-                    )
+                    if self.calls == 2:
+                        return SourceMessage(
+                            self.path,
+                            "e2e-503",
+                            "local",
+                            original_url="https://example.invalid/product",
+                        )
+                    return None
 
             catch_up_source = CatchUpSource(source_file)
             coordinator.source = catch_up_source
