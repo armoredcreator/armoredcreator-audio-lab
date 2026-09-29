@@ -61,6 +61,25 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(row.working_path is not None)
         self.assertTrue(row.result_path is not None)
 
+    def test_publish_once_receives_fresh_publication_without_preflight(self):
+        class IdempotentPublisher:
+            def __init__(self, db):
+                self.db = db
+                self.calls = 0
+
+            def publish_once(self, item):
+                self.calls += 1
+                if self.db.publication(item.item_id) is not None:
+                    raise AssertionError("Pipeline must not pre-create publication before publish_once")
+                return PublicationResult(True, "telegram-456")
+
+        pub = IdempotentPublisher(self.db)
+        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub)
+        p.run(self.item)
+
+        self.assertEqual(pub.calls, 1)
+        self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
+
     def test_telegram_timeout_enters_recovery_without_becoming_failed(self):
         class UnknownPublisher(Publisher):
             def publish(self, item):
