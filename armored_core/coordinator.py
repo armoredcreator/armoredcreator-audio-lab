@@ -318,11 +318,9 @@ class Coordinator:
                 )
 
                 # Pipeline.run() persists recoverable failures as RECOVERY and
-                # then re-raises. Do not reconcile it inline here: an exception
-                # may represent a crash/process interruption whose durable state
-                # must be recovered only by the explicit recovery/startup path.
-                # The current candidate still owns the historical checkpoint, so
-                # CATCH-UP must stop before asking Sync for another candidate.
+                # then re-raises. Keep the failed candidate durable, but continue
+                # the historical scan. Its checkpoint remains blocked until a
+                # later recovery pass resolves the technical failure.
                 current = self.db.get(item_id)
                 if current.state == State.RECOVERY:
                     # Technical pipeline failures are durable RECOVERY items,
@@ -358,10 +356,10 @@ class Coordinator:
     def run_catch_up(self) -> list[str]:
         import asyncio
         processed = asyncio.run(self.run_catch_up_async())
-        # Never force LIVE here. The async runner is the authority: a
-        # materialization failure deliberately leaves historical sync open so
-        # the failed candidate remains recoverable and the next restart can
-        # resume from the persisted checkpoint.
+        # Never force LIVE here. The async runner is the authority: unresolved
+        # technical failures leave historical sync open while later candidates
+        # may still be processed; recovery remains responsible for the blocked
+        # checkpoint before LIVE.
         return processed
 
     async def _fetch_live_candidate_with_watchdog(self, fetch_candidate):
