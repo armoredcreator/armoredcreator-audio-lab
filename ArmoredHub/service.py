@@ -307,9 +307,6 @@ class ArmoredHub:
                 if exact_matches:
                     return sorted(set(exact_matches))
 
-                if not query:
-                    return []
-
                 # Forum-topic-scoped Telegram search is not a reliable sole source of
                 # truth: Telegram/Telethon can return no results for an existing message
                 # when top_msg_id/reply_to filtering is used. Fall back to a normal
@@ -347,6 +344,9 @@ class ArmoredHub:
                 exact_matches = sorted(set(exact_matches))
                 if exact_matches:
                     return exact_matches
+
+                if not query:
+                    return []
 
                 # Keep the raw API search as a second independent fallback for
                 # installations where iter_messages(search=...) behaves differently.
