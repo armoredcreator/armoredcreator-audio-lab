@@ -10,11 +10,14 @@ rem ARMORED CREATOR - START ALL
 rem TELEGRAM BOT API LOCAL -> COORDINATOR
 rem ================================================================
 
-rem Vision V1 + Caption ativos.
-set "ARMORED_CAPTION_ENABLED=1"
-set "ARMORED_CAPTION_MODEL=gemini-3.1-flash-lite"
-set "ARMORED_CAPTION_API_TIMEOUT=90"
-set "ARMORED_CAPTION_ALLOW_DETERMINISTIC_FALLBACK=0"
+rem Vision V1 + ArmoredIA/Caption ativos.
+set "ARMORED_IA_ENABLED=1"
+set "ARMORED_IA_CAPTION_ENABLED=1"
+set "ARMORED_IA_MODEL=gemini-3.1-flash-lite"
+set "ARMORED_IA_API_TIMEOUT=90"
+set "ARMORED_IA_MAX_CANDIDATES=10"
+set "ARMORED_IA_MAX_ATTEMPTS=5"
+set "ARMORED_IA_RETRY_DELAY=2"
 
 rem Caminho do Telegram Bot API nesta maquina.
 rem Para outra maquina, altere somente esta linha.
