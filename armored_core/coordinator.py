@@ -511,8 +511,9 @@ class Coordinator:
             # already-scanned candidate on the same process lifetime.
             if not before.issubset(after):
                 reset = getattr(self.source, "reset_historical_scan", None)
-                if reset is not None:
-                    reset()
+                if reset is None:
+                    return
+                reset()
                 continue
 
             # A materialization failure leaves a RECEIVED reservation with
