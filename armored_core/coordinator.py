@@ -269,30 +269,6 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
-                    # A technical RECOVERY item may be reconciled once during this
-                    # CATCH-UP invocation. WAITING_VISION is different: it is the
-                    # explicit Vision V1 "product not resolved" boundary and must
-                    # not be retried automatically. In either case, an unresolved
-                    # current candidate owns the historical checkpoint.
-                    if current.state == State.RECOVERY:
-                        try:
-                            self.recover(item_id)
-                        except Exception as recovery_exc:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                "[COORDINATOR][CATCH-UP] Item %s permanece em %s; "
-                                "checkpoint bloqueado: %s",
-                                item_id,
-                                current.state.value,
-                                recovery_exc,
-                            )
-                        current = self.db.get(item_id)
-
-                        if current.state in (State.WAITING_VISION, State.RECOVERY):
-                            processed.append(item_id)
-                            self._last_catch_up_completed_count = completed_count
-                            return processed
-
                     if (
                         current.state == State.PUBLISHED
                         and current.cleanup_completed
@@ -507,8 +483,10 @@ class Coordinator:
             before = {
                 str(row["content_id"])
                 for row in self.db.conn.execute(
-                    "SELECT content_id FROM items WHERE state=? ORDER BY created_at, content_id",
-                    (State.RECOVERY.value,),
+                    "SELECT content_id FROM items WHERE state=? "
+                    "OR (state=? AND (original_path IS NULL OR original_path='')) "
+                    "ORDER BY created_at, content_id",
+                    (State.RECOVERY.value, State.RECEIVED.value),
                 ).fetchall()
             }
             if not before:
@@ -519,15 +497,25 @@ class Coordinator:
             after = {
                 str(row["content_id"])
                 for row in self.db.conn.execute(
-                    "SELECT content_id FROM items WHERE state=? ORDER BY created_at, content_id",
-                    (State.RECOVERY.value,),
+                    "SELECT content_id FROM items WHERE state=? "
+                    "OR (state=? AND (original_path IS NULL OR original_path='')) "
+                    "ORDER BY created_at, content_id",
+                    (State.RECOVERY.value, State.RECEIVED.value),
                 ).fetchall()
             }
 
-            # Continue only when at least one technical RECOVERY item was
-            # actually resolved. If none was resolved, avoid a tight retry loop.
-            if before.issubset(after):
-                return
+            # When Recovery makes progress, the Sync iterator must be rebuilt
+            # from the durable checkpoint. The real Telegram source otherwise
+            # remains exhausted and its in-memory _seen set would hide the
+            # already-scanned candidate on the same process lifetime.
+            if not before.issubset(after):
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is not None:
+                    reset()
+                continue
+
+            # No Recovery/rediscovery progress: stop instead of tight-looping.
+            return
 
     async def _run_forever_async(
         self,
@@ -689,11 +677,13 @@ class Coordinator:
         states = (
             State.RECEIVED.value, State.VISION.value,
             State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
-            State.FAILED.value,
+            State.FAILED.value, State.PUBLISHED.value,
         )
         placeholders = ",".join("?" for _ in states)
         rows = self.db.conn.execute(
-            f"SELECT content_id, state FROM items WHERE state IN ({placeholders}) ORDER BY created_at, content_id", states
+            f"SELECT content_id, state FROM items WHERE state IN ({placeholders}) "
+            "OR (state=? AND cleanup_completed=0) ORDER BY created_at, content_id",
+            (*states, State.PUBLISHED.value),
         ).fetchall()
         recovered = []
         for row in rows:
