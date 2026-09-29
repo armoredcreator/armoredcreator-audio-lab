@@ -481,29 +481,35 @@ class Coordinator:
             if self.db.historical_complete():
                 return
 
-            before = {
-                str(row["content_id"])
-                for row in self.db.conn.execute(
-                    "SELECT content_id FROM items WHERE state=? "
-                    "OR (state=? AND (original_path IS NULL OR original_path='')) "
-                    "ORDER BY created_at, content_id",
-                    (State.RECOVERY.value, State.RECEIVED.value),
-                ).fetchall()
-            }
+            before = set()
+            for row in self.db.conn.execute(
+                "SELECT content_id, state FROM items "
+                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value),
+            ).fetchall():
+                item = self.db.get(str(row["content_id"]))
+                if (
+                    item.state == State.RECOVERY
+                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                ):
+                    before.add(str(row["content_id"]))
             if not before:
                 return
 
             self.recover_pending()
 
-            after = {
-                str(row["content_id"])
-                for row in self.db.conn.execute(
-                    "SELECT content_id FROM items WHERE state=? "
-                    "OR (state=? AND (original_path IS NULL OR original_path='')) "
-                    "ORDER BY created_at, content_id",
-                    (State.RECOVERY.value, State.RECEIVED.value),
-                ).fetchall()
-            }
+            after = set()
+            for row in self.db.conn.execute(
+                "SELECT content_id, state FROM items "
+                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value),
+            ).fetchall():
+                item = self.db.get(str(row["content_id"]))
+                if (
+                    item.state == State.RECOVERY
+                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                ):
+                    after.add(str(row["content_id"]))
 
             # When Recovery makes progress, the Sync iterator must be rebuilt
             # from the durable checkpoint. The real Telegram source otherwise
