@@ -278,12 +278,28 @@ Ela recebe contexto durável da Vision e não precisa redescobrir o produto.
 
 O provider Gemini recebe uma única solicitação e pode devolver até 10 candidatas.
 
+Contrato atualmente executado:
+
 ~~~
 1 chamada Gemini
 -> até 10 candidatas
 -> Policy local
 -> primeira válida
 ~~~
+
+**Estado de fechamento:** o Selector atual ainda escolhe a primeira candidata válida. O desenho final desta versão exige comparar todas as candidatas válidas por uma regra local, determinística e testável, escolhendo a melhor sem realizar segunda chamada ao Gemini.
+
+O comportamento final pretendido é:
+
+~~~
+1 chamada Gemini
+-> até 10 candidatas
+-> Policy local
+-> todas as válidas
+-> ranking/score local determinístico
+-> melhor candidata
+~~~
+
 
 Se todas forem rejeitadas:
 
