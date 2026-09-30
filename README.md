@@ -196,6 +196,33 @@ desconectar
 
 Esse ciclo existe para evitar disputa pela sessão SQLite e o antigo database is locked no Windows.
 
+## 5.1 Indisponibilidade temporária da rede — pendência de fechamento
+
+O teste real de 30/09 revelou dois comportamentos distintos:
+
+~~~
+internet cai durante download
+-> materialização interrompida por 60s sem progresso
+-> checkpoint não avança
+-> candidato não é concluído
+~~~
+
+Essa parte funcionou conforme o contrato.
+
+Porém, depois da falha, enquanto o Telegram ainda estava indisponível, as tentativas de reconexão esgotaram e o Coordinator encerrou com código 1.
+
+Ainda não está comprovado o comportamento final desejado:
+
+~~~
+indisponibilidade temporária Telegram
+-> manter Coordinator vivo
+-> reconectar progressivamente
+-> reencontrar o mesmo candidato
+-> processar sem perder checkpoint
+~~~
+
+O caso está registrado como uma pendência específica de resiliência do runtime.
+
 ---
 
 # 6. ArmoredVision V1
@@ -319,6 +346,26 @@ Retry é destinado a problemas técnicos do provider, como timeout, conexão, 42
 ## 8.3 Sem fallback determinístico
 
 Quando não existe uma legenda válida, a IA falha de forma explícita e o item fica recuperável.
+
+## 8.4 Auditoria persistente das candidatas — pendência de fechamento
+
+O SQLite é a fonte de verdade interna, porém a implementação atual ainda não possui uma tabela específica para registrar individualmente todas as candidatas retornadas pelo batch e suas decisões da Policy.
+
+O contrato de fechamento exige persistir, por candidata:
+
+~~~
+content_id
+batch_id
+candidate_index
+caption
+policy_valid
+rejection_reason
+score
+selected
+created_at
+~~~
+
+A finalidade é permitir reconstruir, depois da execução, exatamente o que Gemini devolveu, por que cada opção foi aceita ou rejeitada e qual opção foi finalmente selecionada.
 
 ---
 
@@ -454,13 +501,33 @@ publication inexistente
 -> confirmação
 ~~~
 
-Não se deve pré-criar uma publication que faça a pipeline tratar item novo como publicação já existente.
+Não se deve pré-criar uma publication que faça item novo entrar no caminho de reconciliação como se já tivesse sido publicado. A chamada publish_once() pode registrar internamente o início da publicação depois de constatar que não existe registro anterior; isso é diferente de criar a publication antes da decisão de novo envio.
 
-## 11.3 CONFIRMED
+## 11.3 Hub Preflight — pendência de fechamento
+
+O fluxo final deve validar a configuração essencial do Hub antes de consumir o processamento caro do Studio/RVC.
+
+A ordem desejada é:
+
+~~~
+Vision
+-> ArmoredIA
+-> Hub Preflight
+-> Studio/RVC
+-> publicação
+~~~
+
+O preflight não publica e não substitui a reconciliação. Ele deve apenas verificar antecipadamente a configuração necessária para o efeito externo, incluindo destino, tópico, credenciais e transporte Bot API.
+
+Se a configuração já for impossível, o item deve entrar em Recovery sem gastar o trabalho caro do Studio/RVC.
+
+**Estado atual:** esse preflight ainda não foi implementado nem certificado.
+
+## 11.4 CONFIRMED
 
 CONFIRMED exige mensagem real e message_id válido.
 
-## 11.4 UNKNOWN
+## 11.5 UNKNOWN
 
 UNKNOWN significa evidência insuficiente.
 
@@ -470,13 +537,13 @@ UNKNOWN
 -> não republicar automaticamente
 ~~~
 
-## 11.5 ABSENT
+## 11.6 ABSENT
 
 ABSENT exige evidência suficiente de ausência.
 
 Uma operação externa potencialmente executada não pode ser tratada como inexistente apenas porque uma busca inicial não encontrou evidência.
 
-## 11.6 Reconciliação
+## 11.7 Reconciliação
 
 ~~~
 busca contextual
@@ -607,6 +674,19 @@ RVC e análises podem manter detalhes completos em arquivo sem despejar esses da
 
 A suíte cobre arquitetura, Coordinator, Database, Storage, Sync, Recovery, Startup Audit, Telegram lifecycle, CATCH-UP, LIVE, reconnect, Vision V1, ArmoredIA, Policy, provider Gemini, Studio, RVC, FFmpeg, Hub, reconciliação, idempotência e cleanup.
 
+## 17.1 Estado atual do CI
+
+No commit 73a8fd9d6e3b63272d8ee5e603e0d23720159a2a, os workflows 911 e 912 foram concluídos com sucesso. Ambos executaram a suíte completa com:
+
+~~~
+python -m pytest -q -W error::RuntimeWarning
+
+160 passed
+1 skipped
+~~~
+
+As alterações de observabilidade, portanto, possuem confirmação verde no CI. O teste local no ambiente Windows ainda deve ser repetido antes do freeze definitivo.
+
 Comando principal:
 
 ~~~
@@ -619,18 +699,11 @@ Verificação adicional:
 git diff --check
 ~~~
 
-Última execução verde registrada antes das últimas alterações de observabilidade:
-
-~~~
-160 passed
-1 skipped
-~~~
-
-As alterações de observabilidade devem passar novamente pela suíte antes do congelamento final.
+O CI do commit atual já confirmou 160 passed, 1 skipped. O resultado passa a fazer parte da evidência desta versão.
 
 ---
 
-# 18. Evidência operacional real em 29/09/2026
+# 18. Evidência operacional real em 29–30/09/2026
 
 ## Item 412
 
@@ -658,13 +731,33 @@ RECOVERY
 -> cleanup
 ~~~
 
-Esses dois casos comprovam integração real de Recovery, Vision, ArmoredIA, Studio, Hub, Telegram e cleanup.
+Esses casos comprovam integração real de Recovery, Vision, ArmoredIA, Studio, Hub, Telegram e cleanup.
 
-Eles não substituem a prova específica de uma falha dentro da ArmoredIA seguida de Recovery direto na própria IA.
+Na certificação histórica zerada, também foram observados, com publicação real e cleanup:
+
+~~~
+1383
+1174
+823
+706
+564
+563
+698
+550
+767
+~~~
+
+Em todos esses casos o log observou a sequência necessária até PUBLISHED + cleanup.
+
+O item 823 é uma evidência importante de download lento: 25,5 MiB foram materializados em aproximadamente 239,2s e o pipeline continuou normalmente até publicação e cleanup.
+
+O item 564 produziu avisos do decoder H.264 (mmco: unref short failure) durante o Studio, mas terminou normalmente em Hub, confirmação Telegram e cleanup. O aviso não foi promovido a falha do pipeline.
+
+Esses resultados comprovam operação real, mas não substituem a prova específica de uma falha dentro da ArmoredIA seguida de Recovery direto na própria IA.
 
 ---
 
-# 19. Auditoria real de startup em 29/09/2026
+# 19. Auditoria real de startup e estado persistente
 
 Resumo observado:
 
@@ -682,13 +775,46 @@ Resumo observado:
 
 Publicações históricas ambíguas foram verificadas conforme o contrato do Hub.
 
+## 19.1 Snapshot formal observado em 30/09/2026 após reinício
+
+Depois da interrupção causada pela perda real de internet, o processo foi reiniciado. O Startup Audit encontrou:
+
+~~~
+itens                   = 209
+publicados              = 128
+pendentes               = 81
+falhos                  = 0
+limpos                  = 128
+workspaces              = 209
+órfãos                  = 0
+publicações_confirmadas = 128
+ambíguas                = 0
+~~~
+
+Esse snapshot comprova que o SQLite preservou o estado de 209 itens, sem órfãos e sem transformar a interrupção de rede em uma massa de itens FAILED.
+
+## 19.2 Snapshot operacional externo usado para o teste
+
+Antes da execução histórica zerada, o tópico do Hub foi limpo exclusivamente por script:
+
+~~~
+Grupo Hub          : -1004341972306
+Tópico             : 228
+Mensagens antes    : 79
+Mensagens apagadas : 79
+Tópico raiz        : preservado
+Grupo fonte        : não tocado
+~~~
+
+Esse procedimento criou um destino externo limpo sem apagar o histórico da fonte Telegram.
+
 ---
 
-# 20. Teste histórico do zero
+# 20. Teste histórico do zero — execução real
 
-O próximo teste operacional deve começar com o estado interno zerado, mantendo o histórico Telegram intacto.
+O teste histórico foi iniciado com o estado interno zerado e o histórico Telegram preservado.
 
-## 20.1 O que é zerado
+## 20.1 O que foi zerado
 
 ~~~
 storage/database/armoredcreator.db
@@ -707,7 +833,7 @@ storage/backups
 vazio, preservando .gitkeep
 ~~~
 
-## 20.2 O que não deve ser apagado
+## 20.2 O que não foi apagado
 
 ~~~
 credentials/project.env
@@ -720,7 +846,7 @@ armoredcreator.db na raiz do projeto
 
 O banco canônico é o que fica em storage/database/armoredcreator.db.
 
-## 20.3 Resultado esperado
+## 20.3 Resultado observado
 
 ~~~
 CATCH-UP
@@ -737,7 +863,25 @@ CATCH-UP
 -> próximo candidato
 ~~~
 
-## 20.4 O que observar
+## 20.4 Falha real de conectividade observada
+
+Durante o processamento do item 697, a internet caiu.
+
+~~~
+697
+-> download iniciado
+-> 1.0 MiB de 42.2 MiB
+-> conexão Telegram encerrada
+-> 60s sem progresso
+-> materialização interrompida
+-> checkpoint não avança
+~~~
+
+O Coordinator não marcou 697 como PUBLISHED nem como FAILED definitivo. Entretanto, depois das tentativas de reconexão, o processo encerrou com código 1 porque o Telegram continuava indisponível.
+
+Esse caso comprova checkpoint seguro diante da falha, mas deixa aberta a resiliência de manter o processo vivo até a conectividade retornar.
+
+## 20.5 O que observar para a certificação final
 
 - um item ativo por vez;
 - nenhum pré-download de lote;
@@ -758,6 +902,8 @@ CATCH-UP
 # 21. CATCH-UP -> LIVE
 
 Chegar ao fim do iterador não basta.
+
+**Estado atual:** ainda não observado em execução real desde o teste histórico zerado.
 
 Condição:
 
@@ -787,33 +933,55 @@ Uma futura V2 deve voltar isoladamente, com nova certificação.
 
 # 23. Critérios de fechamento histórico
 
+O freeze da versão atual depende de evidência, não apenas da existência de testes unitários.
+
 ~~~
-[ ] suíte final verde
-[ ] diff --check limpo
-[ ] SQLite zerado
-[ ] checkpoints zerados
-[ ] storage zerado
-[ ] histórico Telegram intacto
-[ ] CATCH-UP iniciado do zero
-[ ] um item ativo por vez
-[ ] nenhum pré-download
-[ ] Vision V1 correto
-[ ] WAITING_VISION somente unresolved real
-[ ] ArmoredIA operacional
-[ ] até 10 candidatas por chamada
-[ ] Policy local
-[ ] sem segunda chamada por exaustão de Policy
-[ ] falha técnica de IA em RECOVERY
-[ ] Recovery de IA sem rerun de Vision
-[ ] Studio e RVC corretos
+[ ] Selector compara todas as candidatas válidas
+[ ] ranking/score local é determinístico e testado
+[ ] primeira candidata válida não é mais escolhida por ordem de chegada
+
+[ ] cada candidata do batch é persistida no SQLite
+[ ] motivo de cada rejeição é persistido
+[ ] score é persistido
+[ ] candidata selecionada é identificável no histórico
+
+[ ] Hub Preflight ocorre antes do Studio/RVC
+[ ] configuração inválida do Hub não consome processamento caro
+
+[ ] perda temporária de internet não encerra Coordinator
+[ ] Sync reconecta progressivamente enquanto Telegram estiver indisponível
+[ ] candidato interrompido por falha de rede é reencontrado
+[ ] checkpoint continua seguro durante a recuperação
+
+[ ] falha real da ArmoredIA gera RECOVERY
+[ ] Recovery da ArmoredIA volta diretamente para IA
+[ ] Vision não é repetida nesse caso
+
+[ ] CATCH-UP histórico completo desde checkpoint zero
+[ ] nenhum candidato legítimo ficou para trás
+[ ] nenhum predecessor foi pulado
+[ ] checkpoints finais conferidos
+
+[ ] WAITING_VISION ocorre somente para unresolved real da Vision V1
+[ ] nenhum erro técnico de IA/Studio/Hub é mascarado como WAITING_VISION
+
+[ ] Studio e RVC completos
 [ ] Hub idempotente
 [ ] CONFIRMED com message_id real
-[ ] UNKNOWN não republica
-[ ] cleanup correto
-[ ] checkpoints seguros
+[ ] UNKNOWN não republica automaticamente
+[ ] cleanup somente após PUBLISHED
 [ ] zero órfãos
+
 [ ] CATCH-UP concluído
-[ ] LIVE iniciado
+[ ] nenhum Recovery/bloqueio pendente impede a transição
+[ ] modo LIVE ativado
+[ ] primeiro item LIVE processado
+[ ] confirmação Telegram real em LIVE
+
+[ ] suíte local final verde
+[ ] CI final verde no commit de freeze
+[ ] README atualizado com evidências finais
+[ ] versão congelada/tagueada
 ~~~
 
 ---
@@ -847,21 +1015,39 @@ cleanup
 Vision -> ArmoredIA
 Gemini real
 Studio/RVC real
+RVC voice=melody
 Hub real
 Telegram CONFIRMED
 PUBLISHED + cleanup
 Recovery real
+restart com SQLite persistente
+checkpoint preservado após falha de materialização
+0 órfãos no Startup Audit observado
+CI verde: 160 passed, 1 skipped
 ~~~
 
-## Evidência ainda necessária
+## Comprovado parcialmente
 
 ~~~
-falha real de ArmoredIA + Recovery direto na IA
-CATCH-UP histórico completo desde checkpoint zero
-comportamento do histórico sob falhas reais
-checkpoints históricos completos
+Recovery retomando de state=IA após restart
+indisponibilidade temporária da internet durante download
+reconexão Telegram após perda de conectividade
+histórico real com dezenas de itens consecutivos
+~~~
+
+## Evidência ainda necessária / pendência de implementação
+
+~~~
+Selector: ranking da melhor entre todas as válidas
+Persistência individual das candidatas + rejeições + score
+Hub Preflight antes do Studio/RVC
+Coordinator permanecer vivo durante indisponibilidade temporária Telegram
+falha real de ArmoredIA -> RECOVERY -> IA
+CATCH-UP histórico completamente esgotado
+checkpoints finais de todos os tópicos do histórico
 transição final CATCH-UP -> LIVE
-suíte verde após as alterações de observabilidade
+primeiro item LIVE real após o CATCH-UP
+suíte local final após todas as correções de fechamento
 ~~~
 
 ---
@@ -880,10 +1066,16 @@ VISION V1
 ARMOREDIA
 -> até 10 candidatas
 -> Policy local
--> primeira válida
+-> todas as válidas
+-> ranking local determinístico
+-> melhor candidata
 -> exaustão = RECOVERY
 -> falha técnica = RECOVERY
 -> não reroda Vision
+
+HUB PREFLIGHT
+-> valida configuração essencial
+-> bloqueia trabalho caro quando configuração é impossível
 
 STUDIO
 -> análise
@@ -912,7 +1104,26 @@ O objetivo da certificação é provar que cada efeito externo, cada mudança de
 
 ---
 
-# 26. Regra de manutenção
+# 26. Escopo bloqueado antes do próximo grupo fonte
+
+A versão atual deve ser tratada como **Fonte 1 em certificação**.
+
+O grupo fonte atual permanece:
+
+~~~
+ARMORED_SYNC_SOURCE=-1003788989075
+ARMORED_SYNC_SOURCE_ID=-1003788989075
+~~~
+
+Qualquer segundo grupo fonte será **aditivo** e jamais substituirá a Fonte 1.
+
+Antes de implementar a Fonte 2, o ciclo da Fonte 1 deve concluir a certificação histórica desta versão, incluindo CATCH-UP completo e a transição para LIVE.
+
+A Fonte 2 deverá ter seus próprios parâmetros e checkpoints sem romper o princípio global de um único item ativo. O comportamento do Sync atual de descobrir os tópicos do fórum também deve continuar explícito: ARMORED_SYNC_TOPIC_NAME não é hoje um filtro exclusivo.
+
+---
+
+# 27. Regra de manutenção
 
 O baseline oficial continua intocado.
 
