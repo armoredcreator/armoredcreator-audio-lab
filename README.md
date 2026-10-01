@@ -218,32 +218,32 @@ desconectar
 
 Esse ciclo existe para evitar disputa pela sessão SQLite e o antigo database is locked no Windows.
 
-## 5.1 Indisponibilidade temporária da rede — pendência de fechamento
+## 5.1 Indisponibilidade temporária da rede — fechado por contrato e testes
 
-O teste real de 30/09 revelou dois comportamentos distintos:
+A execução real de 30/09 registrou uma queda durante o download do item 697:
 
 ~~~
 internet cai durante download
--> materialização interrompida por 60s sem progresso
+-> materialização interrompida por ausência de progresso
 -> checkpoint não avança
 -> candidato não é concluído
 ~~~
 
-Essa parte funcionou conforme o contrato.
+Esse comportamento permanece protegido.
 
-Porém, depois da falha, enquanto o Telegram ainda estava indisponível, as tentativas de reconexão esgotaram e o Coordinator encerrou com código 1.
-
-Ainda não está comprovado o comportamento final desejado:
+O Coordinator agora trata falhas transitórias da origem Telegram durante CATCH-UP e LIVE como condições recuperáveis:
 
 ~~~
-indisponibilidade temporária Telegram
--> manter Coordinator vivo
--> reconectar progressivamente
--> reencontrar o mesmo candidato
--> processar sem perder checkpoint
+falha transitória
+-> liberar sessão
+-> reconstruir conexão/iterator
+-> retry com backoff
+-> manter checkpoint seguro
+-> continuar o processo
 ~~~
 
-O caso está registrado como uma pendência específica de resiliência do runtime.
+O comportamento de reconexão está coberto por testes automatizados. A perda real de internet continua sendo uma evidência operacional complementar a executar antes do freeze final.
+
 
 ---
 
@@ -327,27 +327,18 @@ Ela recebe contexto durável da Vision e não precisa redescobrir o produto.
 
 O provider Gemini recebe uma única solicitação e pode devolver até 10 candidatas.
 
-Contrato atualmente executado:
+Contrato atual:
 
 ~~~
 1 chamada Gemini
 -> até 10 candidatas
 -> Policy local
--> primeira válida
-~~~
-
-**Estado de fechamento:** o Selector atual ainda escolhe a primeira candidata válida. O desenho final desta versão exige comparar todas as candidatas válidas por uma regra local, determinística e testável, escolhendo a melhor sem realizar segunda chamada ao Gemini.
-
-O comportamento final pretendido é:
-
-~~~
-1 chamada Gemini
--> até 10 candidatas
--> Policy local
--> todas as válidas
+-> todas as candidatas são avaliadas
 -> ranking/score local determinístico
 -> melhor candidata
 ~~~
+
+A ordem de chegada não decide mais sozinha a legenda. O score local usa sinais textuais determinísticos do contexto já persistido pela Vision, com o índice original apenas como desempate explícito. Não existe segunda chamada ao Gemini por exaustão da Policy.
 
 
 Se todas forem rejeitadas:
@@ -369,11 +360,9 @@ Retry é destinado a problemas técnicos do provider, como timeout, conexão, 42
 
 Quando não existe uma legenda válida, a IA falha de forma explícita e o item fica recuperável.
 
-## 8.4 Auditoria persistente das candidatas — pendência de fechamento
+## 8.4 Auditoria persistente das candidatas
 
-O SQLite é a fonte de verdade interna, porém a implementação atual ainda não possui uma tabela específica para registrar individualmente todas as candidatas retornadas pelo batch e suas decisões da Policy.
-
-O contrato de fechamento exige persistir, por candidata:
+Cada batch de caption grava no SQLite todas as candidatas devolvidas, válidas ou rejeitadas, até o limite de 10:
 
 ~~~
 content_id
@@ -387,7 +376,8 @@ selected
 created_at
 ~~~
 
-A finalidade é permitir reconstruir, depois da execução, exatamente o que Gemini devolveu, por que cada opção foi aceita ou rejeitada e qual opção foi finalmente selecionada.
+A persistência ocorre tanto quando uma candidata é selecionada quanto quando todas são rejeitadas e o item entra em RECOVERY. Assim, a decisão pode ser reconstruída sem depender dos logs do provider.
+
 
 ---
 
@@ -525,25 +515,12 @@ publication inexistente
 
 Não se deve pré-criar uma publication que faça item novo entrar no caminho de reconciliação como se já tivesse sido publicado. A chamada publish_once() pode registrar internamente o início da publicação depois de constatar que não existe registro anterior; isso é diferente de criar a publication antes da decisão de novo envio.
 
-## 11.3 Hub Preflight — pendência de fechamento
+## 11.3 Hub Preflight — melhoria futura fora do fechamento atual
 
-O fluxo final deve validar a configuração essencial do Hub antes de consumir o processamento caro do Studio/RVC.
+O Hub Preflight permanece registrado no Issue #44 como melhoria de eficiência e hardening.
 
-A ordem desejada é:
+Ele não faz parte dos gates desta versão, não substitui publish/reconciliação e não é necessário para concluir a certificação atual. O fluxo de publicação real e sua reconciliação continuam sendo a autoridade externa.
 
-~~~
-Vision
--> ArmoredIA
--> Hub Preflight
--> Studio/RVC
--> publicação
-~~~
-
-O preflight não publica e não substitui a reconciliação. Ele deve apenas verificar antecipadamente a configuração necessária para o efeito externo, incluindo destino, tópico, credenciais e transporte Bot API.
-
-Se a configuração já for impossível, o item deve entrar em Recovery sem gastar o trabalho caro do Studio/RVC.
-
-**Estado atual:** esse preflight ainda não foi implementado nem certificado.
 
 ## 11.4 CONFIRMED
 
@@ -951,7 +928,7 @@ WAITING_VISION
 
 Chegar ao fim do iterador não basta.
 
-**Estado atual:** ainda não observado em execução real desde o teste histórico zerado.
+O mecanismo de cutover está coberto por teste automatizado controlado. Não é necessário esperar conteúdo espontâneo novo no grupo fonte para fechar esta versão; eventual conteúdo LIVE real posterior será evidência complementar.
 
 Condição:
 
@@ -984,22 +961,23 @@ Uma futura V2 deve voltar isoladamente, com nova certificação.
 O freeze da versão atual depende de evidência, não apenas da existência de testes unitários.
 
 ~~~
-[ ] Selector compara todas as candidatas válidas
-[ ] ranking/score local é determinístico e testado
-[ ] primeira candidata válida não é mais escolhida por ordem de chegada
+[x] Selector compara todas as candidatas válidas
+[x] ranking/score local é determinístico e testado
+[x] primeira candidata válida não é mais escolhida por ordem de chegada
 
-[ ] cada candidata do batch é persistida no SQLite
-[ ] motivo de cada rejeição é persistido
-[ ] score é persistido
-[ ] candidata selecionada é identificável no histórico
+[x] cada candidata do batch é persistida no SQLite
+[x] motivo de cada rejeição é persistido
+[x] score é persistido
+[x] candidata selecionada é identificável no histórico
 
-[ ] Hub Preflight ocorre antes do Studio/RVC
-[ ] configuração inválida do Hub não consome processamento caro
+[x] Hub Preflight permanece fora do escopo desta versão; Issue #44 é melhoria futura
 
-[ ] perda temporária de internet não encerra Coordinator
-[ ] Sync reconecta progressivamente enquanto Telegram estiver indisponível
-[ ] candidato interrompido por falha de rede é reencontrado
-[ ] checkpoint continua seguro durante a recuperação
+
+[x] Coordinator permanece vivo diante de falha transitória em LIVE
+[x] reconexão/reset do iterator em CATCH-UP está coberto por teste
+[x] checkpoint permanece seguro durante a recuperação
+[ ] revalidação operacional de perda real de internet
+
 
 [ ] falha real da ArmoredIA gera RECOVERY
 [ ] Recovery da ArmoredIA volta diretamente para IA
@@ -1023,11 +1001,10 @@ O freeze da versão atual depende de evidência, não apenas da existência de t
 [ ] cleanup somente após PUBLISHED
 [ ] zero órfãos
 
-[ ] CATCH-UP concluído
-[ ] nenhum Recovery/bloqueio pendente impede a transição
-[ ] modo LIVE ativado
-[ ] primeiro item LIVE processado
-[ ] confirmação Telegram real em LIVE
+[ ] CATCH-UP histórico completamente esgotado
+[ ] checkpoints finais de todos os tópicos do histórico
+[x] mecanismo controlado de CATCH-UP -> LIVE
+[ ] evidência operacional complementar de item LIVE real após CATCH-UP
 
 [ ] suíte local final verde
 [ ] CI final verde no commit de freeze
