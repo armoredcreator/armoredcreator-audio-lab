@@ -15,6 +15,9 @@ class ArmoredIA:
     def generate_caption(self, product_context: dict[str, Any]) -> str:
         return self.caption_generator.generate(product_context)
 
+    def generate_caption_with_evidence(self, product_context: dict[str, Any]):
+        return self.caption_generator.generate_with_evidence(product_context)
+
     def run(self, task: str, context: dict[str, Any]) -> Any:
         task_name = str(task or "").strip().casefold()
         if task_name == "caption":
