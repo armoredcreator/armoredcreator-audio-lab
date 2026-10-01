@@ -181,12 +181,12 @@ class LiveReconnectTests(unittest.TestCase):
                     os.environ.pop("ARMORED_LIVE_ERROR_BACKOFF", None)
                 else:
                     os.environ["ARMORED_LIVE_ERROR_BACKOFF"] = previous
-                coordinator.close()
 
             self.assertEqual(source.calls, 2)
             self.assertEqual(source.reader.connects, 2)
             self.assertEqual(source.reader.disconnects, 1)
             self.assertEqual(db.sync_topic_checkpoint(228), 99)
+            coordinator.close()
 
     def test_next_poll_can_materialize_the_next_candidate_after_previous_completion(self):
         with tempfile.TemporaryDirectory() as td:

@@ -109,7 +109,7 @@ def test_pipeline_persists_all_rejections_before_entering_recovery(monkeypatch):
             self.calls += 1
             return [
                 "Compre agora 🔥\n#oferta",
-                "Batom matte ✨\n#beleza",
+                "Bancada suspensa ✨\n#beleza",
                 "Medida 10ml ✨\n#beleza",
             ]
 
