@@ -433,11 +433,114 @@ class TelegramSource:
         self._historical_scan_exhausted = True
         return None
 
+    def _grouped_candidates(
+        self,
+        messages: list[Any],
+        topic_id: int,
+        topic_name: str,
+    ) -> list[tuple[int, int, str, Any, str]]:
+        """Resolve one Telegram media group into one-or-more safe candidates.
+
+        A grouped album can contain photos, videos, and the Shopee link on a
+        different media item. When there is exactly one unique Shopee link in
+        the group, the group represents one content and one video is selected
+        deterministically. If multiple distinct links exist in the same group,
+        only videos that carry their own link are preserved automatically; links
+        living only on photos remain ambiguous and are not guessed.
+        """
+        videos = [
+            message
+            for message in messages
+            if getattr(message, "video", None)
+        ]
+        if not videos:
+            return []
+
+        unique_links: dict[str, str] = {}
+        for message in messages:
+            url = self._shopee_url(message)
+            if url:
+                key = url.casefold()
+                unique_links.setdefault(key, url)
+
+        if len(unique_links) == 1:
+            original_url = next(iter(unique_links.values()))
+
+            linked_videos = [
+                message
+                for message in videos
+                if self._shopee_url(message) is not None
+            ]
+            if linked_videos:
+                selected = min(
+                    linked_videos,
+                    key=lambda message: int(getattr(message, "id", 0) or 0),
+                )
+            else:
+                selected = min(
+                    videos,
+                    key=lambda message: int(getattr(message, "id", 0) or 0),
+                )
+
+            selected_id = int(getattr(selected, "id", 0) or 0)
+            if selected_id <= 0 or selected_id in self._seen:
+                return []
+
+            return [(
+                selected_id,
+                int(topic_id),
+                topic_name,
+                selected,
+                original_url,
+            )]
+
+        if len(unique_links) > 1:
+            candidates = []
+            emitted_links: set[str] = set()
+            for message in sorted(
+                videos,
+                key=lambda value: int(getattr(value, "id", 0) or 0),
+            ):
+                url = self._shopee_url(message)
+                if not url:
+                    continue
+                key = url.casefold()
+                if key in emitted_links:
+                    continue
+                message_id = int(getattr(message, "id", 0) or 0)
+                if message_id <= 0 or message_id in self._seen:
+                    continue
+                emitted_links.add(key)
+                candidates.append((
+                    message_id,
+                    int(topic_id),
+                    topic_name,
+                    message,
+                    url,
+                ))
+            return candidates
+
+        return []
+
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
         """Stream historical candidates without building a topic-sized list."""
         for topic_id, topic_name in topics:
             pending_video = None
+            pending_group_id = None
+            pending_group: list[Any] = []
             topic_max_id = 0
+
+            async def flush_group():
+                nonlocal pending_group_id, pending_group
+                if pending_group:
+                    for candidate in self._grouped_candidates(
+                        pending_group,
+                        int(topic_id),
+                        topic_name,
+                    ):
+                        yield candidate
+                pending_group_id = None
+                pending_group = []
 
             async for message in self._topic_messages(source, topic_id):
                 message_id = int(getattr(message, "id", 0) or 0)
@@ -446,9 +549,41 @@ class TelegramSource:
                 if message_id <= 0:
                     continue
 
-                # Preserve the backup association rule:
-                # video + Shopee in the same message, or video + Shopee in
-                # the immediately following non-video message.
+                grouped_id = getattr(message, "grouped_id", None)
+                if grouped_id is not None:
+                    grouped_id = int(grouped_id)
+                    if pending_group_id is None:
+                        if pending_video is not None:
+                            pending_id, pending_message = pending_video
+                            if (
+                                pending_id not in self._seen
+                                and self._shopee_url(pending_message) is not None
+                            ):
+                                yield (
+                                    pending_id,
+                                    int(topic_id),
+                                    topic_name,
+                                    pending_message,
+                                    self._shopee_url(pending_message),
+                                )
+                            pending_video = None
+                        pending_group_id = grouped_id
+                        pending_group = [message]
+                    elif grouped_id == pending_group_id:
+                        pending_group.append(message)
+                    else:
+                        async for candidate in flush_group():
+                            yield candidate
+                        pending_group_id = grouped_id
+                        pending_group = [message]
+                    continue
+
+                if pending_group:
+                    async for candidate in flush_group():
+                        yield candidate
+
+                # Preserve the legacy association rule for messages that are
+                # not part of a Telegram media group.
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
                     if not getattr(message, "video", None):
@@ -482,6 +617,10 @@ class TelegramSource:
                     continue
 
                 pending_video = (message_id, message)
+
+            if pending_group:
+                async for candidate in flush_group():
+                    yield candidate
 
             if topic_max_id:
                 self._historical_checkpoints[topic_id] = topic_max_id
@@ -722,11 +861,10 @@ class TelegramSource:
     async def fetch_live_candidate_async(self) -> tuple[SyncMessage | None, dict[int, int]]:
         """Discover one LIVE candidate using a round-robin topic poll.
 
-        LIVE must not sweep every monitored topic on every poll. That pattern
-        can trigger Telegram FloodWait even when no new source video exists.
-        Poll exactly one topic per cycle, in rotation, and inspect at most the
-        two messages after the persisted checkpoint so the video + following
-        Shopee URL association remains deterministic.
+        A new media group may contain several photos/videos and place its
+        Shopee URL on a different media item. Inspect a bounded window of new
+        messages so one grouped album can be resolved as one content without
+        sweeping the entire topic.
         """
         source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
@@ -751,24 +889,75 @@ class TelegramSource:
                 if self.db is not None else 0
             )
 
+            try:
+                scan_limit = max(
+                    3,
+                    int(os.getenv("ARMORED_LIVE_GROUP_SCAN_LIMIT", "20")),
+                )
+            except ValueError:
+                scan_limit = 20
+
             messages = []
             async for message in self.reader.client.iter_messages(
                 source_ref,
                 reply_to=topic_id,
                 min_id=max(0, checkpoint),
                 reverse=True,
-                limit=2,
+                limit=scan_limit,
             ):
                 messages.append(message)
 
-            if not messages:
-                return None, {}
-
-            for index, message in enumerate(messages):
+            index = 0
+            while index < len(messages):
+                message = messages[index]
                 message_id = int(getattr(message, "id", 0) or 0)
                 if message_id <= checkpoint or message_id in self._seen:
+                    index += 1
                     continue
+
+                grouped_id = getattr(message, "grouped_id", None)
+                if grouped_id is not None:
+                    grouped_id = int(grouped_id)
+                    group = [message]
+                    next_index = index + 1
+                    while next_index < len(messages):
+                        next_message = messages[next_index]
+                        next_grouped_id = getattr(next_message, "grouped_id", None)
+                        if next_grouped_id is None or int(next_grouped_id) != grouped_id:
+                            break
+                        group.append(next_message)
+                        next_index += 1
+
+                    candidates = self._grouped_candidates(
+                        group,
+                        int(topic_id),
+                        topic_name,
+                    )
+                    for candidate_id, _, _, candidate_message, original_url in candidates:
+                        if candidate_id <= checkpoint or candidate_id in self._seen:
+                            continue
+                        group_max_id = max(
+                            int(getattr(item, "id", 0) or 0)
+                            for item in group
+                        )
+                        return (
+                            SyncMessage(
+                                telegram_message_id=str(candidate_id),
+                                source_id=source_id,
+                                topic_id=topic_id,
+                                topic_name=topic_name,
+                                original_url=original_url,
+                                materialize=lambda target, m=candidate_message:
+                                    self._download_to(m, target),
+                            ),
+                            {topic_id: group_max_id},
+                        )
+
+                    index = next_index
+                    continue
+
                 if not getattr(message, "video", None):
+                    index += 1
                     continue
 
                 original_url = self._shopee_url(message)
@@ -778,6 +967,7 @@ class TelegramSource:
                         original_url = self._shopee_url(next_message)
 
                 if original_url is None:
+                    index += 1
                     continue
 
                 return (
