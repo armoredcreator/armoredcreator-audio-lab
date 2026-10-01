@@ -264,7 +264,10 @@ class TelegramSource:
         """
         if self.db is None or not original_url:
             return False
-        row = self.db.conn.execute(
+        conn = getattr(self.db, "conn", None)
+        if conn is None:
+            return False
+        row = conn.execute(
             "SELECT 1 FROM items WHERE LOWER(TRIM(original_url)) = LOWER(TRIM(?)) LIMIT 1",
             (str(original_url),),
         ).fetchone()
