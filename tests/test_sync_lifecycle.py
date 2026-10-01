@@ -744,6 +744,66 @@ class SyncLifecycleTests(unittest.TestCase):
             db.close()
 
 
+    def test_catch_up_reconnects_after_transient_telegram_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+
+            class Reader:
+                def __init__(self):
+                    self.disconnects = 0
+
+                async def connect(self):
+                    pass
+
+                async def disconnect(self):
+                    self.disconnects += 1
+
+            class ReconnectingSource:
+                def __init__(self):
+                    self.reader = Reader()
+                    self.calls = 0
+                    self.resets = 0
+                    self.historical_scan_exhausted = True
+
+                async def fetch_next_async(self):
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise ConnectionError("telegram-connection-closed")
+                    return None
+
+                def reset_historical_scan(self):
+                    self.resets += 1
+
+                def complete_historical_sync(self):
+                    db.complete_historical_sync()
+
+            source = ReconnectingSource()
+            coordinator = Coordinator(
+                db,
+                storage,
+                Vision(),
+                Studio(storage),
+                Publisher(),
+                source,
+            )
+            previous = os.environ.get("ARMORED_SYNC_ERROR_BACKOFF")
+            os.environ["ARMORED_SYNC_ERROR_BACKOFF"] = "1"
+            try:
+                asyncio.run(coordinator._run_catch_up_with_recovery_async())
+            finally:
+                if previous is None:
+                    os.environ.pop("ARMORED_SYNC_ERROR_BACKOFF", None)
+                else:
+                    os.environ["ARMORED_SYNC_ERROR_BACKOFF"] = previous
+
+            self.assertTrue(db.historical_complete())
+            self.assertEqual(source.calls, 2)
+            self.assertEqual(source.resets, 1)
+            self.assertEqual(source.reader.disconnects, 1)
+            coordinator.close()
+
     def test_shutdown_during_studio_preserves_inflight_state_for_restart(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

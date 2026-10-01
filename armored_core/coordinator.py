@@ -491,6 +491,11 @@ class Coordinator:
         import asyncio
         return asyncio.run(self.run_live_once_async())
 
+    @staticmethod
+    def _is_transient_source_error(exc: BaseException) -> bool:
+        """Return whether an origin failure is safe to retry inside CATCH-UP."""
+        return isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError))
+
     async def _run_catch_up_with_recovery_async(self) -> None:
         """Run historical processing, then retry technical RECOVERY items.
 
@@ -498,10 +503,48 @@ class Coordinator:
         remains blocked, so after the historical scan we reconcile RECOVERY
         items and, when progress is made, rescan from the durable checkpoint.
         WAITING_VISION is intentionally not auto-retried here.
+
+        Real Telegram connection failures can also happen while the historical
+        iterator is being advanced after a materialization failure. In that
+        case the iterator is no longer safe to resume. Release the source,
+        rebuild its historical iterator from the durable checkpoint, and retry
+        with bounded backoff so the Coordinator process remains alive.
         """
         rediscovery_attempted: set[str] = set()
+        source_error_backoff = max(
+            1.0,
+            float(os.getenv("ARMORED_SYNC_ERROR_BACKOFF", "5")),
+        )
         while True:
-            await self.run_catch_up_async()
+            try:
+                await self.run_catch_up_async()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not self._is_transient_source_error(exc) or not hasattr(
+                    self.source, "reader"
+                ):
+                    raise
+                import logging
+                logging.getLogger(__name__).exception(
+                    "[COORDINATOR][CATCH-UP] Telegram/rede de origem indisponível; "
+                    "Coordinator permanece vivo e tentará reconectar: %s",
+                    exc,
+                )
+                try:
+                    await self._release_source_connection()
+                except Exception as release_exc:
+                    logging.getLogger(__name__).warning(
+                        "[COORDINATOR][CATCH-UP] Falha ao liberar sessão após "
+                        "erro de origem: %s",
+                        release_exc,
+                    )
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    raise
+                reset()
+                await asyncio.sleep(source_error_backoff)
+                continue
             if self.db.historical_complete():
                 return
 
