@@ -123,7 +123,19 @@ RECEIVED -> VISION -> IA -> STUDIO -> PUBLISHING -> PUBLISHED
 
 ## 3.1 WAITING_VISION
 
-WAITING_VISION significa exclusivamente que a Vision V1 não conseguiu resolver o produto Shopee exato.
+WAITING_VISION significa exclusivamente que a Vision V1 não conseguiu resolver o produto Shopee exato e, portanto, o item não possui destino de publicação naquele momento.
+
+É um estado persistente de conteúdo sem destino por enquanto:
+
+~~~
+Vision não encontrou produto Shopee
+-> WAITING_VISION
+-> permanece no SQLite
+-> não publica
+-> não é Recovery
+-> não bloqueia o CATCH-UP
+-> não impede a entrada em LIVE
+~~~
 
 Falha de Gemini, Policy, ArmoredIA, Studio ou Hub não deve ser classificada como WAITING_VISION.
 
@@ -172,6 +184,8 @@ descobrir candidato
 ~~~
 
 O checkpoint nunca pode saltar um predecessor que ainda não tenha conclusão segura.
+
+`WAITING_VISION` é uma conclusão segura de classificação para fins de CATCH-UP: o item continua persistido, mas seu checkpoint pode avançar quando não existe um bloqueio técnico anterior. `RECOVERY`, ao contrário, mantém o checkpoint bloqueado até resolução.
 
 ## 4.3 LIVE
 
@@ -881,7 +895,33 @@ O Coordinator não marcou 697 como PUBLISHED nem como FAILED definitivo. Entreta
 
 Esse caso comprova checkpoint seguro diante da falha, mas deixa aberta a resiliência de manter o processo vivo até a conectividade retornar.
 
-## 20.5 O que observar para a certificação final
+## 20.5 Regra de contagem do CATCH-UP
+
+Para fins operacionais, os estados são contabilizados por quantidade, não por exemplos de IDs:
+
+~~~
+PUBLICADOS
+-> quantidade de itens cuja pipeline foi concluída
+-> Telegram CONFIRMED
+-> cleanup concluído
+-> checkpoint pode avançar
+
+RECOVERY
+-> quantidade de itens com falha técnica/processamento incompleto
+-> precisa de recuperação
+-> checkpoint permanece bloqueado até resolução
+
+WAITING_VISION
+-> quantidade de itens para os quais a Vision não encontrou produto Shopee
+-> sem destino de publicação por enquanto
+-> permanece no SQLite
+-> não é erro
+-> não é Recovery
+-> não bloqueia CATCH-UP
+-> não impede LIVE
+~~~
+
+## 20.6 O que observar para a certificação final
 
 - um item ativo por vez;
 - nenhum pré-download de lote;
@@ -963,6 +1003,9 @@ O freeze da versão atual depende de evidência, não apenas da existência de t
 [ ] checkpoints finais conferidos
 
 [ ] WAITING_VISION ocorre somente para unresolved real da Vision V1
+[ ] WAITING_VISION não bloqueia CATCH-UP
+[ ] WAITING_VISION não impede LIVE
+[ ] WAITING_VISION permanece persistido no SQLite
 [ ] nenhum erro técnico de IA/Studio/Hub é mascarado como WAITING_VISION
 
 [ ] Studio e RVC completos
@@ -1033,6 +1076,8 @@ Recovery retomando de state=IA após restart
 indisponibilidade temporária da internet durante download
 reconexão Telegram após perda de conectividade
 histórico real com dezenas de itens consecutivos
+WAITING_VISION classificado e persistido como estado sem destino
+WAITING_VISION liberando progresso do CATCH-UP: coberto por teste regressivo automatizado
 ~~~
 
 ## Evidência ainda necessária / pendência de implementação
