@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,91 @@ class RecoveryTests(unittest.TestCase):
     def tearDown(self):
         self.db.close()
         self.td.cleanup()
+
+    def test_ia_failure_recovers_without_rerunning_vision_and_keeps_context(self):
+        class CountingVision:
+            def __init__(self):
+                self.calls = 0
+                self.context = {
+                    "product_name": "Produto teste",
+                    "affiliate_links": ["https://shopee.com.br/item"],
+                    "source": "vision-v1",
+                }
+
+            def identify(self, item):
+                self.calls += 1
+                return VisionResult(
+                    "recover-final",
+                    "https://example.invalid/a",
+                    ia_context=self.context,
+                )
+
+        class FailOnceIA:
+            def __init__(self):
+                self.calls = 0
+
+            def generate_caption(self, product_context):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("simulated-ia-crash")
+                self.context_seen = dict(product_context)
+                return "Oferta boa 😊"
+
+        vision = CountingVision()
+        ia = FailOnceIA()
+        studio = Studio(self.storage)
+        publisher = Publisher()
+
+        first_pipeline = Pipeline(
+            self.db,
+            self.storage,
+            vision,
+            studio,
+            publisher,
+            ia=ia,
+        )
+
+        previous_ia = os.environ.get("ARMORED_IA_ENABLED")
+        previous_caption = os.environ.get("ARMORED_IA_CAPTION_ENABLED")
+        os.environ["ARMORED_IA_ENABLED"] = "1"
+        os.environ["ARMORED_IA_CAPTION_ENABLED"] = "1"
+        try:
+            with self.assertRaises(RuntimeError):
+                first_pipeline.run(self.item)
+
+            after_failure = self.db.get(self.item)
+            self.assertEqual(after_failure.state, State.RECOVERY)
+            self.assertEqual(vision.calls, 1)
+            self.assertEqual(after_failure.ia_context, vision.context)
+            self.assertIsNone(after_failure.publication_caption)
+
+            # Simulate process restart: construct a new Recovery coordinator
+            # around the same durable SQLite state and the same one-shot IA.
+            Recovery(
+                self.db,
+                self.storage,
+                vision,
+                Studio(self.storage),
+                publisher,
+                ia=ia,
+            ).reconcile(self.item)
+
+            recovered = self.db.get(self.item)
+            self.assertEqual(recovered.state, State.PUBLISHED)
+            self.assertEqual(vision.calls, 1)
+            self.assertEqual(ia.calls, 2)
+            self.assertEqual(ia.context_seen, vision.context)
+            self.assertEqual(recovered.publication_caption, "Oferta boa 😊")
+            self.assertEqual(publisher.count, 1)
+        finally:
+            if previous_ia is None:
+                os.environ.pop("ARMORED_IA_ENABLED", None)
+            else:
+                os.environ["ARMORED_IA_ENABLED"] = previous_ia
+            if previous_caption is None:
+                os.environ.pop("ARMORED_IA_CAPTION_ENABLED", None)
+            else:
+                os.environ["ARMORED_IA_CAPTION_ENABLED"] = previous_caption
 
     def test_recovery_retries_waiting_vision(self):
         vision = VisionWaitThenResolve()
