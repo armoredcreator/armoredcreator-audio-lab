@@ -166,9 +166,17 @@ Responsabilidades:
 
 ## 4.1 Regra de candidato
 
-Um candidato válido contém vídeo e link Shopee na mesma mensagem, ou vídeo seguido imediatamente pela mensagem com o link Shopee.
+Um candidato válido pode ocorrer de três formas:
 
-Não existe busca arbitrária por links em várias mensagens seguintes.
+- vídeo e link Shopee na mesma mensagem;
+- vídeo seguido imediatamente pela mensagem não-vídeo que contém o link Shopee;
+- álbum Telegram (grouped_id) contendo vídeo(s), foto(s) e um único link Shopee distribuído entre as mídias, em qualquer ordem.
+
+Dentro de um álbum com um único link Shopee, o grupo representa um único conteúdo e um vídeo é escolhido deterministicamente para materialização. Se houver links diferentes no mesmo álbum, somente vídeos que carregam explicitamente seu próprio link são associados; associações ambíguas não são adivinhadas.
+
+O mesmo link Shopee já representado no SQLite não gera uma nova coleta. A deduplicação por URL ocorre na descoberta do Sync; o SyncService de ingestão continua mantendo IDs Telegram distintos como registros independentes quando chamado diretamente.
+
+Não existe busca arbitrária por links em mensagens não relacionadas.
 
 ## 4.2 CATCH-UP
 
