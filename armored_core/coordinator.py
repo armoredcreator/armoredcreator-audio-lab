@@ -271,12 +271,22 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
-                    # A pipeline may durably enter RECOVERY without raising
-                    # (for example when a test binding or integration records
-                    # the state directly). RECOVERY still blocks checkpoint
-                    # advancement, but must not abort the historical scan.
-                    if current.state in (State.RECOVERY, State.WAITING_VISION):
+                    # RECOVERY is a technical/incomplete-processing state:
+                    # it keeps the historical checkpoint blocked until the item
+                    # is resolved. WAITING_VISION is different: Vision has
+                    # durably classified the candidate but found no Shopee
+                    # destination. It is retained in SQLite and does not block
+                    # historical progress or LIVE.
+                    if current.state == State.RECOVERY:
                         checkpoint_blocked = True
+                        processed.append(item_id)
+                        continue
+
+                    if current.state == State.WAITING_VISION:
+                        topic_id = getattr(message, "topic_id", None)
+                        commit = getattr(source, "commit_live_checkpoints", None)
+                        if topic_id is not None and commit is not None and not checkpoint_blocked:
+                            commit({int(topic_id): int(message.telegram_message_id)})
                         processed.append(item_id)
                         continue
 
@@ -287,9 +297,9 @@ class Coordinator:
                     ):
                         # Checkpoints are monotonic and must never jump past
                         # an earlier candidate whose materialization or
-                        # processing failed. The successful item may finish,
-                        # but its checkpoint remains uncommitted until the
-                        # blocked predecessor is recoverable.
+                        # processing failed. WAITING_VISION is not such a
+                        # blocker: it is a durable "no destination for now"
+                        # classification and may advance its topic checkpoint.
                         topic_id = getattr(message, "topic_id", None)
                         commit = getattr(source, "commit_live_checkpoints", None)
                         if topic_id is not None and commit is not None:
