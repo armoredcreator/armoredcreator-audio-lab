@@ -413,6 +413,9 @@ class Coordinator:
                 checkpoints = dict(checkpoints) if messages else {}
 
         if not messages:
+            commit = getattr(source, "commit_live_checkpoints", None)
+            if commit is not None and checkpoints:
+                commit(checkpoints)
             return []
 
         message = messages[0]
