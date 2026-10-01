@@ -161,6 +161,14 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 self.assertEqual(source.commits, [{7: 100}, {7: 101}])
                 self.assertTrue(source.historical_complete)
                 self.assertTrue(coordinator.db.historical_complete())
+
+                asyncio.run(
+                    coordinator._run_forever_async(
+                        max_cycles=1,
+                        poll_seconds=0,
+                    )
+                )
+                self.assertTrue(source.live_called)
             finally:
                 coordinator.close()
 
