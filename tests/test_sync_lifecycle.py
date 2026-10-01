@@ -279,7 +279,15 @@ class SyncLifecycleTests(unittest.TestCase):
             reader = Reader()
             source = LiveGroupedSource(root, reader, db)
 
-            message, checkpoints = asyncio.run(source.fetch_live_candidate_async())
+            previous = os.environ.get("ARMORED_SYNC_SOURCE")
+            os.environ["ARMORED_SYNC_SOURCE"] = "123456"
+            try:
+                message, checkpoints = asyncio.run(source.fetch_live_candidate_async())
+            finally:
+                if previous is None:
+                    os.environ.pop("ARMORED_SYNC_SOURCE", None)
+                else:
+                    os.environ["ARMORED_SYNC_SOURCE"] = previous
 
             self.assertIsNotNone(message)
             self.assertEqual(message.telegram_message_id, "102")
@@ -414,13 +422,22 @@ class SyncLifecycleTests(unittest.TestCase):
 
             source = LiveGroupedSource(root, Reader(), db)
 
-            first, first_cp = asyncio.run(source.fetch_live_candidate_async())
-            self.assertIsNotNone(first)
-            self.assertEqual(first.telegram_message_id, "100")
-            self.assertEqual(first_cp, {567: 100})
+            previous = os.environ.get("ARMORED_SYNC_SOURCE")
+            os.environ["ARMORED_SYNC_SOURCE"] = "123456"
+            try:
+                first, first_cp = asyncio.run(source.fetch_live_candidate_async())
+                self.assertIsNotNone(first)
+                self.assertEqual(first.telegram_message_id, "100")
+                self.assertEqual(first_cp, {567: 100})
 
-            db.set_sync_topic_checkpoint(567, "topic", 100)
-            second, second_cp = asyncio.run(source.fetch_live_candidate_async())
+                db.set_sync_topic_checkpoint(567, "topic", 100)
+                second, second_cp = asyncio.run(source.fetch_live_candidate_async())
+            finally:
+                if previous is None:
+                    os.environ.pop("ARMORED_SYNC_SOURCE", None)
+                else:
+                    os.environ["ARMORED_SYNC_SOURCE"] = previous
+
             self.assertIsNotNone(second)
             self.assertEqual(second.telegram_message_id, "102")
             self.assertEqual(second_cp, {567: 102})
@@ -461,7 +478,15 @@ class SyncLifecycleTests(unittest.TestCase):
                     return [(567, "topic")]
 
             source = LiveSource(root, Reader(), db)
-            message, checkpoints = asyncio.run(source.fetch_live_candidate_async())
+            previous = os.environ.get("ARMORED_SYNC_SOURCE")
+            os.environ["ARMORED_SYNC_SOURCE"] = "123456"
+            try:
+                message, checkpoints = asyncio.run(source.fetch_live_candidate_async())
+            finally:
+                if previous is None:
+                    os.environ.pop("ARMORED_SYNC_SOURCE", None)
+                else:
+                    os.environ["ARMORED_SYNC_SOURCE"] = previous
 
             self.assertIsNone(message)
             self.assertEqual(checkpoints, {567: 100})
