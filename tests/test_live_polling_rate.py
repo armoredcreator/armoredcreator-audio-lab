@@ -22,7 +22,7 @@ class _Client:
         topic_id = kwargs["reply_to"]
         self.requested_topics.append(topic_id)
         limit = kwargs.get("limit")
-        assert limit == 2
+        assert limit == 20
 
         async def gen():
             if topic_id == 2:
