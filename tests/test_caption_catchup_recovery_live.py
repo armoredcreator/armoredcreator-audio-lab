@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from armored_core.coordinator import Coordinator
 from armored_core.models import PublicationCheck, State
-from armored_core.services import PublicationResult, VisionResult
+from armored_core.services import PublicationResult, VisionResult, VisionUnresolvedError
 
 
 class VisionStage:
@@ -118,6 +118,52 @@ class RebuildableCatchUpSource:
 
 
 class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
+    def test_waiting_vision_does_not_block_catchup_or_live(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_file = root / "input.mp4"
+            source_file.write_bytes(b"ORIGINAL")
+
+            class WaitingFirstVision:
+                def identify(self, item):
+                    if item.item_id == "100":
+                        raise VisionUnresolvedError("produto Shopee não encontrado")
+                    return VisionResult(
+                        f"product-{item.item_id}",
+                        f"https://example.invalid/affiliate-{item.item_id}",
+                        ia_context={"productName": f"Product {item.item_id}"},
+                    )
+
+            publisher = DeterministicPublisher()
+            source = RebuildableCatchUpSource(source_file)
+            coordinator = Coordinator.build(
+                root,
+                SimpleNamespace(
+                    vision=WaitingFirstVision(),
+                    ia=None,
+                    studio=DeterministicStudio(),
+                    publisher=publisher,
+                    source=source,
+                ),
+            )
+            source.db = coordinator.db
+
+            try:
+                asyncio.run(coordinator._run_catch_up_with_recovery_async())
+
+                waiting = coordinator.db.get("100")
+                published = coordinator.db.get("101")
+
+                self.assertEqual(waiting.state, State.WAITING_VISION)
+                self.assertEqual(published.state, State.PUBLISHED)
+                self.assertTrue(published.cleanup_completed)
+                self.assertEqual(publisher.published, ["101"])
+                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
+                self.assertTrue(source.historical_complete)
+                self.assertTrue(coordinator.db.historical_complete())
+            finally:
+                coordinator.close()
+
     def test_ia_failure_recovery_does_not_rerun_vision_and_reenters_live(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
