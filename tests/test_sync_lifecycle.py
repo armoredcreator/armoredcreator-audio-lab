@@ -304,6 +304,8 @@ class SyncLifecycleTests(unittest.TestCase):
 
         source._topic_messages = grouped_messages
         old_mode = source._historical_complete
+        old_source = os.environ.get("ARMORED_SYNC_SOURCE")
+        os.environ["ARMORED_SYNC_SOURCE"] = "source"
         candidates = []
         try:
             async def collect():
@@ -313,6 +315,10 @@ class SyncLifecycleTests(unittest.TestCase):
             asyncio.run(collect())
         finally:
             source._historical_complete = old_mode
+            if old_source is None:
+                os.environ.pop("ARMORED_SYNC_SOURCE", None)
+            else:
+                os.environ["ARMORED_SYNC_SOURCE"] = old_source
 
         self.assertEqual([message.telegram_message_id for message in candidates], ["302"])
         self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/grouped-iter")
@@ -329,7 +335,15 @@ class SyncLifecycleTests(unittest.TestCase):
                 yield message
 
         source._topic_messages = grouped_messages
-        candidates, checkpoints = asyncio.run(source.collect_historical_batch_async())
+        old_source = os.environ.get("ARMORED_SYNC_SOURCE")
+        os.environ["ARMORED_SYNC_SOURCE"] = "source"
+        try:
+            candidates, checkpoints = asyncio.run(source.collect_historical_batch_async())
+        finally:
+            if old_source is None:
+                os.environ.pop("ARMORED_SYNC_SOURCE", None)
+            else:
+                os.environ["ARMORED_SYNC_SOURCE"] = old_source
 
         self.assertEqual([message.telegram_message_id for message in candidates], ["402"])
         self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/grouped-batch")
