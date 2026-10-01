@@ -111,6 +111,37 @@ def test_caption_selects_valid_candidate_without_second_gemini_call(monkeypatch)
     assert provider.calls == 1
 
 
+def test_caption_ranks_all_valid_candidates_and_keeps_one_provider_call(monkeypatch):
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+
+    class Provider:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_candidates(self, task, context, limit):
+            self.calls += 1
+            return [
+                "Tudo bonito ✨\n#legal",
+                "Cantinho prático ✨\n#cozinha",
+                "Visual charmoso ✨\n#casa",
+            ]
+
+    provider = Provider()
+    generator = CaptionGenerator(provider=provider)
+    result = generator.generate_with_evidence({
+        "productName": "Bancada Suspensa",
+        "description": "solução prática para cozinha organizada",
+    })
+
+    assert provider.calls == 1
+    assert result.selection.index == 2
+    assert result.caption == "Cantinho prático ✨\n#cozinha"
+    assert len(result.evaluations) == 3
+    assert all(evaluation.policy_valid for evaluation in result.evaluations)
+    assert result.evaluations[1].selected is True
+    assert result.evaluations[1].score > result.evaluations[0].score
+
+
 def test_all_policy_rejections_are_one_request_then_recovery(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
 

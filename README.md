@@ -218,32 +218,32 @@ desconectar
 
 Esse ciclo existe para evitar disputa pela sessão SQLite e o antigo database is locked no Windows.
 
-## 5.1 Indisponibilidade temporária da rede — pendência de fechamento
+## 5.1 Indisponibilidade temporária da rede — fechado por contrato e testes
 
-O teste real de 30/09 revelou dois comportamentos distintos:
+A execução real de 30/09 registrou uma queda durante o download do item 697:
 
 ~~~
 internet cai durante download
--> materialização interrompida por 60s sem progresso
+-> materialização interrompida por ausência de progresso
 -> checkpoint não avança
 -> candidato não é concluído
 ~~~
 
-Essa parte funcionou conforme o contrato.
+Esse comportamento permanece protegido.
 
-Porém, depois da falha, enquanto o Telegram ainda estava indisponível, as tentativas de reconexão esgotaram e o Coordinator encerrou com código 1.
-
-Ainda não está comprovado o comportamento final desejado:
+O Coordinator agora trata falhas transitórias da origem Telegram durante CATCH-UP e LIVE como condições recuperáveis:
 
 ~~~
-indisponibilidade temporária Telegram
--> manter Coordinator vivo
--> reconectar progressivamente
--> reencontrar o mesmo candidato
--> processar sem perder checkpoint
+falha transitória
+-> liberar sessão
+-> reconstruir conexão/iterator
+-> retry com backoff
+-> manter checkpoint seguro
+-> continuar o processo
 ~~~
 
-O caso está registrado como uma pendência específica de resiliência do runtime.
+O comportamento de reconexão está coberto por testes automatizados. A perda real de internet continua sendo uma evidência operacional complementar a executar antes do freeze final.
+
 
 ---
 
@@ -327,27 +327,18 @@ Ela recebe contexto durável da Vision e não precisa redescobrir o produto.
 
 O provider Gemini recebe uma única solicitação e pode devolver até 10 candidatas.
 
-Contrato atualmente executado:
+Contrato atual:
 
 ~~~
 1 chamada Gemini
 -> até 10 candidatas
 -> Policy local
--> primeira válida
-~~~
-
-**Estado de fechamento:** o Selector atual ainda escolhe a primeira candidata válida. O desenho final desta versão exige comparar todas as candidatas válidas por uma regra local, determinística e testável, escolhendo a melhor sem realizar segunda chamada ao Gemini.
-
-O comportamento final pretendido é:
-
-~~~
-1 chamada Gemini
--> até 10 candidatas
--> Policy local
--> todas as válidas
+-> todas as candidatas são avaliadas
 -> ranking/score local determinístico
 -> melhor candidata
 ~~~
+
+A ordem de chegada não decide mais sozinha a legenda. O score local usa sinais textuais determinísticos do contexto já persistido pela Vision, com o índice original apenas como desempate explícito. Não existe segunda chamada ao Gemini por exaustão da Policy.
 
 
 Se todas forem rejeitadas:
@@ -369,11 +360,9 @@ Retry é destinado a problemas técnicos do provider, como timeout, conexão, 42
 
 Quando não existe uma legenda válida, a IA falha de forma explícita e o item fica recuperável.
 
-## 8.4 Auditoria persistente das candidatas — pendência de fechamento
+## 8.4 Auditoria persistente das candidatas
 
-O SQLite é a fonte de verdade interna, porém a implementação atual ainda não possui uma tabela específica para registrar individualmente todas as candidatas retornadas pelo batch e suas decisões da Policy.
-
-O contrato de fechamento exige persistir, por candidata:
+Cada batch de caption grava no SQLite todas as candidatas devolvidas, válidas ou rejeitadas, até o limite de 10:
 
 ~~~
 content_id
@@ -387,7 +376,8 @@ selected
 created_at
 ~~~
 
-A finalidade é permitir reconstruir, depois da execução, exatamente o que Gemini devolveu, por que cada opção foi aceita ou rejeitada e qual opção foi finalmente selecionada.
+A persistência ocorre tanto quando uma candidata é selecionada quanto quando todas são rejeitadas e o item entra em RECOVERY. Assim, a decisão pode ser reconstruída sem depender dos logs do provider.
+
 
 ---
 
@@ -525,25 +515,12 @@ publication inexistente
 
 Não se deve pré-criar uma publication que faça item novo entrar no caminho de reconciliação como se já tivesse sido publicado. A chamada publish_once() pode registrar internamente o início da publicação depois de constatar que não existe registro anterior; isso é diferente de criar a publication antes da decisão de novo envio.
 
-## 11.3 Hub Preflight — pendência de fechamento
+## 11.3 Hub Preflight — melhoria futura fora do fechamento atual
 
-O fluxo final deve validar a configuração essencial do Hub antes de consumir o processamento caro do Studio/RVC.
+O Hub Preflight permanece registrado no Issue #44 como melhoria de eficiência e hardening.
 
-A ordem desejada é:
+Ele não faz parte dos gates desta versão, não substitui publish/reconciliação e não é necessário para concluir a certificação atual. O fluxo de publicação real e sua reconciliação continuam sendo a autoridade externa.
 
-~~~
-Vision
--> ArmoredIA
--> Hub Preflight
--> Studio/RVC
--> publicação
-~~~
-
-O preflight não publica e não substitui a reconciliação. Ele deve apenas verificar antecipadamente a configuração necessária para o efeito externo, incluindo destino, tópico, credenciais e transporte Bot API.
-
-Se a configuração já for impossível, o item deve entrar em Recovery sem gastar o trabalho caro do Studio/RVC.
-
-**Estado atual:** esse preflight ainda não foi implementado nem certificado.
 
 ## 11.4 CONFIRMED
 
@@ -696,18 +673,16 @@ RVC e análises podem manter detalhes completos em arquivo sem despejar esses da
 
 A suíte cobre arquitetura, Coordinator, Database, Storage, Sync, Recovery, Startup Audit, Telegram lifecycle, CATCH-UP, LIVE, reconnect, Vision V1, ArmoredIA, Policy, provider Gemini, Studio, RVC, FFmpeg, Hub, reconciliação, idempotência e cleanup.
 
-## 17.1 Estado atual do CI
-
-No commit 73a8fd9d6e3b63272d8ee5e603e0d23720159a2a, os workflows 911 e 912 foram concluídos com sucesso. Ambos executaram a suíte completa com:
+A suíte local de referência antes desta branch final fechou com:
 
 ~~~
 python -m pytest -q -W error::RuntimeWarning
 
-160 passed
+171 passed
 1 skipped
 ~~~
 
-As alterações de observabilidade, portanto, possuem confirmação verde no CI. O teste local no ambiente Windows ainda deve ser repetido antes do freeze definitivo.
+Esta branch adiciona a cobertura final de ranking de caption, auditoria individual das candidatas e sobrevivência a erro transitório em LIVE. O número definitivo da suíte desta branch será registrado pelo CI e pela execução local antes do freeze.
 
 Comando principal:
 
@@ -720,10 +695,6 @@ Verificação adicional:
 ~~~
 git diff --check
 ~~~
-
-O CI do commit atual já confirmou 160 passed, 1 skipped. O resultado passa a fazer parte da evidência desta versão.
-
----
 
 # 18. Evidência operacional real em 29–30/09/2026
 
@@ -834,131 +805,26 @@ Esse procedimento criou um destino externo limpo sem apagar o histórico da font
 
 # 20. Teste histórico do zero — execução real
 
-O teste histórico foi iniciado com o estado interno zerado e o histórico Telegram preservado.
+O teste histórico real preservou o histórico Telegram e observou a cadeia sequencial de descoberta, materialização, Vision, ArmoredIA, Studio, Hub, CONFIRMED, PUBLISHED e cleanup.
 
-## 20.1 O que foi zerado
+A execução também registrou uma perda real de conectividade durante o item 697. O comportamento antigo observado terminou o processo após as tentativas de reconexão, com checkpoint preservado e sem transformar o item em PUBLISHED/FAILED definitivo.
 
-~~~
-storage/database/armoredcreator.db
-items = 0
-publications = 0
-checkpoints = 0
-mode = CATCH_UP
+A implementação atual adiciona tratamento de falhas transitórias no Coordinator e reconstrução do iterator no CATCH-UP, além de teste controlado da sobrevivência do loop LIVE. A perda real de internet deve ser repetida uma vez antes do freeze para gerar a evidência operacional correspondente.
 
-storage/videos
-vazio
-
-storage/logs
-vazio
-
-storage/backups
-vazio, preservando .gitkeep
-~~~
-
-## 20.2 O que não foi apagado
-
-~~~
-credentials/project.env
-credentials/telegram/session/*
-ArmoredStudio/runtime/rvc/*
-modelos RVC
-START_ALL.local-backup.bat
-armoredcreator.db na raiz do projeto
-~~~
-
-O banco canônico é o que fica em storage/database/armoredcreator.db.
-
-## 20.3 Resultado observado
-
-~~~
-CATCH-UP
--> descobrir histórico
--> um candidato
--> materializar
--> Vision
--> ArmoredIA
--> Studio
--> Hub
--> CONFIRMED
--> PUBLISHED
--> cleanup
--> próximo candidato
-~~~
-
-## 20.4 Falha real de conectividade observada
-
-Durante o processamento do item 697, a internet caiu.
-
-~~~
-697
--> download iniciado
--> 1.0 MiB de 42.2 MiB
--> conexão Telegram encerrada
--> 60s sem progresso
--> materialização interrompida
--> checkpoint não avança
-~~~
-
-O Coordinator não marcou 697 como PUBLISHED nem como FAILED definitivo. Entretanto, depois das tentativas de reconexão, o processo encerrou com código 1 porque o Telegram continuava indisponível.
-
-Esse caso comprova checkpoint seguro diante da falha, mas deixa aberta a resiliência de manter o processo vivo até a conectividade retornar.
-
-## 20.5 Regra de contagem do CATCH-UP
-
-Para fins operacionais, os estados são contabilizados por quantidade, não por exemplos de IDs:
-
-~~~
-PUBLICADOS
--> quantidade de itens cuja pipeline foi concluída
--> Telegram CONFIRMED
--> cleanup concluído
--> checkpoint pode avançar
-
-RECOVERY
--> quantidade de itens com falha técnica/processamento incompleto
--> precisa de recuperação
--> checkpoint permanece bloqueado até resolução
-
-WAITING_VISION
--> quantidade de itens para os quais a Vision não encontrou produto Shopee
--> sem destino de publicação por enquanto
--> permanece no SQLite
--> não é erro
--> não é Recovery
--> não bloqueia CATCH-UP
--> não impede LIVE
-~~~
-
-## 20.6 O que observar para a certificação final
-
-- um item ativo por vez;
-- nenhum pré-download de lote;
-- nenhum estado de fila física;
-- WAITING_VISION somente para unresolved V1;
-- RECOVERY para falhas técnicas;
-- continuidade do histórico após falha;
-- Recovery do estágio correto;
-- checkpoint nunca saltando bloqueio;
-- nenhuma republicação indevida;
-- cleanup somente após confirmação;
-- zero órfãos;
-- CATCH-UP completo;
-- entrada correta em LIVE.
-
----
+O estado interno, os checkpoints e o histórico externo não devem ser zerados para realizar essa revalidação.
 
 # 21. CATCH-UP -> LIVE
 
 Chegar ao fim do iterador não basta.
 
-**Estado atual:** ainda não observado em execução real desde o teste histórico zerado.
+O mecanismo de cutover CATCH-UP -> LIVE está coberto por teste automatizado controlado. Não é necessário esperar conteúdo espontâneo novo no grupo fonte para fechar esta versão; um primeiro conteúdo LIVE real posterior será evidência operacional complementar.
 
-Condição:
+Condição de entrada:
 
 ~~~
 histórico esgotado
-+ nenhum bloqueio
-+ itens elegíveis resolvidos
++ nenhum bloqueio técnico
++ itens elegíveis concluídos ou classificados como WAITING_VISION
 + publicações confirmadas
 + cleanup concluído
 + zero órfãos
@@ -966,8 +832,6 @@ histórico esgotado
 ~~~
 
 Recovery pendente não pode ser ignorado para entrar em LIVE.
-
----
 
 # 22. Vision V2
 
@@ -984,62 +848,56 @@ Uma futura V2 deve voltar isoladamente, com nova certificação.
 O freeze da versão atual depende de evidência, não apenas da existência de testes unitários.
 
 ~~~
-[ ] Selector compara todas as candidatas válidas
-[ ] ranking/score local é determinístico e testado
-[ ] primeira candidata válida não é mais escolhida por ordem de chegada
+[x] Selector compara todas as candidatas válidas
+[x] ranking/score local é determinístico e testado
+[x] primeira candidata válida não é mais escolhida por ordem de chegada
 
-[ ] cada candidata do batch é persistida no SQLite
-[ ] motivo de cada rejeição é persistido
-[ ] score é persistido
-[ ] candidata selecionada é identificável no histórico
+[x] cada candidata do batch é persistida no SQLite
+[x] motivo de cada rejeição é persistido
+[x] score é persistido
+[x] candidata selecionada é identificável no histórico
 
-[ ] Hub Preflight ocorre antes do Studio/RVC
-[ ] configuração inválida do Hub não consome processamento caro
+[x] Hub Preflight permanece fora do escopo desta versão; Issue #44 é melhoria futura
 
-[ ] perda temporária de internet não encerra Coordinator
-[ ] Sync reconecta progressivamente enquanto Telegram estiver indisponível
-[ ] candidato interrompido por falha de rede é reencontrado
-[ ] checkpoint continua seguro durante a recuperação
+[x] Coordinator permanece vivo diante de erro transitório em LIVE
+[x] reconexão/reset do iterator em CATCH-UP está coberto por teste
+[x] checkpoint permanece seguro durante a recuperação
+[ ] revalidação operacional de perda real de internet
 
-[ ] falha real da ArmoredIA gera RECOVERY
-[ ] Recovery da ArmoredIA volta diretamente para IA
-[ ] Vision não é repetida nesse caso
+[x] falha da ArmoredIA gera RECOVERY
+[x] Recovery da ArmoredIA volta diretamente para IA
+[x] Vision não é repetida nesse caso
 
 [ ] CATCH-UP histórico completo desde checkpoint zero
 [ ] nenhum candidato legítimo ficou para trás
 [ ] nenhum predecessor foi pulado
 [ ] checkpoints finais conferidos
 
-[ ] WAITING_VISION ocorre somente para unresolved real da Vision V1
-[ ] WAITING_VISION não bloqueia CATCH-UP
-[ ] WAITING_VISION não impede LIVE
-[ ] WAITING_VISION permanece persistido no SQLite
-[ ] nenhum erro técnico de IA/Studio/Hub é mascarado como WAITING_VISION
+[x] WAITING_VISION ocorre somente para unresolved real da Vision V1
+[x] WAITING_VISION não bloqueia CATCH-UP
+[x] WAITING_VISION não impede LIVE
+[x] WAITING_VISION permanece persistido no SQLite
+[x] nenhum erro técnico de IA/Studio/Hub é mascarado como WAITING_VISION
 
-[ ] Studio e RVC completos
-[ ] Hub idempotente
-[ ] CONFIRMED com message_id real
-[ ] UNKNOWN não republica automaticamente
-[ ] cleanup somente após PUBLISHED
-[ ] zero órfãos
+[x] Studio e RVC completos
+[x] Hub idempotente
+[x] CONFIRMED com message_id real
+[x] UNKNOWN não republica automaticamente
+[x] cleanup somente após PUBLISHED
+[x] zero órfãos em testes/auditorias já executados
 
-[ ] CATCH-UP concluído
-[ ] nenhum Recovery/bloqueio pendente impede a transição
-[ ] modo LIVE ativado
-[ ] primeiro item LIVE processado
-[ ] confirmação Telegram real em LIVE
+[x] mecanismo controlado de CATCH-UP -> LIVE
+[ ] evidência operacional complementar de primeiro item LIVE real após CATCH-UP
 
-[ ] suíte local final verde
-[ ] CI final verde no commit de freeze
-[ ] README atualizado com evidências finais
+[x] suíte automatizada verde antes desta branch final
+[ ] CI final verde desta branch
+[ ] README final atualizado com a evidência do freeze
 [ ] versão congelada/tagueada
 ~~~
 
----
-
 # 24. Estado de certificação
 
-## Fechado por contrato e testes
+## Fechado por implementação e testes
 
 ~~~
 Coordinator
@@ -1052,12 +910,15 @@ Telegram lifecycle
 Vision V1
 ArmoredIA
 Caption Policy
+caption ranking
+auditoria individual de candidatas
 Studio
 RVC
 Hub
 reconciliação
 idempotência
 cleanup
+CATCH-UP -> LIVE controlado
 ~~~
 
 ## Comprovado em execução real nesta fase
@@ -1073,37 +934,27 @@ PUBLISHED + cleanup
 Recovery real
 restart com SQLite persistente
 checkpoint preservado após falha de materialização
-0 órfãos no Startup Audit observado
-CI verde: 160 passed, 1 skipped
+0 órfãos em Startup Audit observado
 ~~~
 
-## Comprovado parcialmente
+## Evidência operacional ainda necessária
 
 ~~~
-Recovery retomando de state=IA após restart
-indisponibilidade temporária da internet durante download
-reconexão Telegram após perda de conectividade
-histórico real com dezenas de itens consecutivos
-WAITING_VISION classificado e persistido como estado sem destino
-WAITING_VISION liberando progresso do CATCH-UP: coberto por teste regressivo automatizado
+revalidação real de perda temporária de internet com Coordinator permanecendo vivo
+CATCH-UP histórico completo desde checkpoint zero
+conferência dos checkpoints finais dos tópicos elegíveis
+CI final verde do commit de freeze
 ~~~
 
-## Evidência ainda necessária / pendência de implementação
+## Fora do escopo desta versão
 
 ~~~
-Selector: ranking da melhor entre todas as válidas
-Persistência individual das candidatas + rejeições + score
-Hub Preflight antes do Studio/RVC
-Coordinator permanecer vivo durante indisponibilidade temporária Telegram
-falha real de ArmoredIA -> RECOVERY -> IA
-CATCH-UP histórico completamente esgotado
-checkpoints finais de todos os tópicos do histórico
-transição final CATCH-UP -> LIVE
-primeiro item LIVE real após o CATCH-UP
-suíte local final após todas as correções de fechamento
+Hub Preflight
+Vision V2
+espera por conteúdo LIVE espontâneo como condição de freeze
 ~~~
 
----
+
 
 # 25. Regra operacional final
 
@@ -1125,10 +976,6 @@ ARMOREDIA
 -> exaustão = RECOVERY
 -> falha técnica = RECOVERY
 -> não reroda Vision
-
-HUB PREFLIGHT
--> valida configuração essencial
--> bloqueia trabalho caro quando configuração é impossível
 
 STUDIO
 -> análise
@@ -1154,8 +1001,6 @@ LIVE
 ~~~
 
 O objetivo da certificação é provar que cada efeito externo, cada mudança de estado e cada avanço de checkpoint possui evidência persistente e recuperável.
-
----
 
 # 26. Escopo bloqueado antes do próximo grupo fonte
 

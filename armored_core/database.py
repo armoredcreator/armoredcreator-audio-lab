@@ -70,6 +70,21 @@ class Database:
             last_seen_message_id INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS caption_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT NOT NULL,
+            batch_id TEXT NOT NULL,
+            candidate_index INTEGER NOT NULL,
+            caption TEXT NOT NULL,
+            policy_valid INTEGER NOT NULL,
+            rejection_reason TEXT,
+            score REAL NOT NULL DEFAULT 0,
+            selected INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(content_id, batch_id, candidate_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_caption_candidates_content
+            ON caption_candidates(content_id, created_at);
         CREATE TABLE IF NOT EXISTS runtime_locks (
             name TEXT PRIMARY KEY,
             pid INTEGER NOT NULL,
@@ -338,6 +353,41 @@ class Database:
             (str(caption), str(item_id)),
         )
         self.conn.commit()
+
+    def record_caption_candidates(self, item_id: str, batch_id: str, evaluations) -> None:
+        """Persist every caption candidate and its local Policy/ranking decision."""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO caption_candidates "
+            "(content_id,batch_id,candidate_index,caption,policy_valid,rejection_reason,score,selected) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (
+                    str(item_id),
+                    str(batch_id),
+                    int(evaluation.index),
+                    str(evaluation.caption),
+                    1 if evaluation.policy_valid else 0,
+                    evaluation.rejection_reason,
+                    float(evaluation.score),
+                    1 if evaluation.selected else 0,
+                )
+                for evaluation in evaluations
+            ],
+        )
+        self.conn.commit()
+
+    def caption_candidates(self, item_id: str, batch_id: str | None = None):
+        if batch_id is None:
+            return self.conn.execute(
+                "SELECT * FROM caption_candidates "
+                "WHERE content_id=? ORDER BY created_at, candidate_index",
+                (str(item_id),),
+            ).fetchall()
+        return self.conn.execute(
+            "SELECT * FROM caption_candidates "
+            "WHERE content_id=? AND batch_id=? ORDER BY candidate_index",
+            (str(item_id), str(batch_id)),
+        ).fetchall()
 
     def set_working(self, item_id: str, path: Path | None) -> None:
         self.conn.execute(
