@@ -107,7 +107,46 @@ class Pipeline:
                 if not item.ia_context:
                     raise RuntimeError("armored-ia-context-missing")
                 with self.trace.stage(item_id, "IA"):
-                    caption = self.ia.generate_caption(dict(item.ia_context))
+                    generate_with_evidence = getattr(
+                        self.ia,
+                        "generate_caption_with_evidence",
+                        None,
+                    )
+                    if callable(generate_with_evidence):
+                        try:
+                            generated = generate_with_evidence(dict(item.ia_context))
+                        except Exception as exc:
+                            batch_id = getattr(exc, "batch_id", None)
+                            evaluations = getattr(exc, "evaluations", ())
+                            if batch_id and evaluations:
+                                self.db.record_caption_candidates(
+                                    item_id,
+                                    batch_id,
+                                    evaluations,
+                                )
+                            raise
+                        self.db.record_caption_candidates(
+                            item_id,
+                            generated.batch_id,
+                            generated.evaluations,
+                        )
+                        caption = generated.caption
+                        self.trace.emit(
+                            item_id,
+                            "IA",
+                            "EVALUATED",
+                            batch_id=generated.batch_id,
+                            candidates=len(generated.evaluations),
+                            valid=sum(
+                                1
+                                for evaluation in generated.evaluations
+                                if evaluation.policy_valid
+                            ),
+                            selected=generated.selection.index,
+                            score=generated.selection.score,
+                        )
+                    else:
+                        caption = self.ia.generate_caption(dict(item.ia_context))
                     if not str(caption or "").strip():
                         raise RuntimeError("armored-ia-empty-caption")
                     self.db.set_caption(item_id, str(caption))
