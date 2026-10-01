@@ -1,5 +1,7 @@
 # ArmoredCreator — Arquitetura Final, Contrato Operacional e Certificação
 
+> **Snapshot de certificação — 01/10/2026:** código final em `5f4ac10d`; suíte local `175 passed, 1 skipped`; CI do código final (`#946` e `#947`) verde. O modo LIVE já foi comprovado com conteúdo novo real. A certificação histórica do grupo `450/451/452` foi concluída e comprovada ponta a ponta.
+
 > Laboratório de reconstrução e certificação: armoredcreator/armoredcreator-test.
 > O repositório oficial armoredcreator/armoredcreator e a branch audit/baseline-2026-09-19 permanecem intocados.
 
@@ -178,9 +180,38 @@ O mesmo link Shopee já representado no SQLite não gera uma nova coleta. A dedu
 
 Não existe busca arbitrária por links em mensagens não relacionadas.
 
+## 4.1.1 Caso histórico 450/451/452 — fechado e comprovado
+
+A auditoria histórica confirmou um único álbum Telegram:
+
+~~~
+tópico              = 287
+grouped_id          = 14295227350202649
+450                  = PHOTO + Shopee 5ardb8fozx
+451                  = PHOTO sem link
+452                  = VIDEO sem link
+~~~
+
+A regra corrigida em `ArmoredSync/service.py` percorre o álbum inteiro quando existe exatamente um link Shopee no grupo e seleciona deterministicamente um vídeo do grupo. Para este caso, o vídeo selecionado foi o `452`, associado ao link `https://s.shopee.com.br/5ardb8fozx`.
+
+A recuperação histórica foi executada e auditada sem alterar o histórico da fonte. O resultado comprovado foi:
+
+~~~
+candidato canônico = 452
+URL canônica       = 5ardb8fozx
+SQLite             = SIM
+state              = PUBLISHED
+cleanup_completed  = 1
+published_message  = 1299
+verification       = CONFIRMED
+Hub correspondente = SIM
+~~~
+
+O caso 450/451/452 está **FECHADO** e constitui evidência real da regra `grouped_id`.
+
 ## 4.2 CATCH-UP
 
-O CATCH-UP histórico é progressivo e sequencial.
+O CATCH-UP histórico é progressivo e sequencial e foi concluído integralmente nesta certificação.
 
 ~~~
 descobrir candidato
@@ -242,7 +273,7 @@ falha transitória
 -> continuar o processo
 ~~~
 
-O comportamento de reconexão está coberto por testes automatizados. A perda real de internet continua sendo uma evidência operacional complementar a executar antes do freeze final.
+O comportamento de reconexão está coberto por testes automatizados. A execução real de 30/09 também demonstrou preservação de checkpoint e recuperação após a interrupção; a cobertura automatizada permanece como proteção adicional.
 
 
 ---
@@ -673,16 +704,18 @@ RVC e análises podem manter detalhes completos em arquivo sem despejar esses da
 
 A suíte cobre arquitetura, Coordinator, Database, Storage, Sync, Recovery, Startup Audit, Telegram lifecycle, CATCH-UP, LIVE, reconnect, Vision V1, ArmoredIA, Policy, provider Gemini, Studio, RVC, FFmpeg, Hub, reconciliação, idempotência e cleanup.
 
-A suíte local de referência antes desta branch final fechou com:
+A suíte do código final foi executada localmente após o merge do fechamento:
 
 ~~~
 python -m pytest -q -W error::RuntimeWarning
 
-171 passed
+175 passed
 1 skipped
 ~~~
 
-Esta branch adiciona a cobertura final de ranking de caption, auditoria individual das candidatas e sobrevivência a erro transitório em LIVE. O número definitivo da suíte desta branch será registrado pelo CI e pela execução local antes do freeze.
+O mesmo código final foi validado no GitHub Actions pelos runs `#946` e `#947`, ambos com conclusão `success`.
+
+O fechamento adiciona a cobertura de ranking de caption, auditoria individual das candidatas e sobrevivência a erro transitório em LIVE.
 
 Comando principal:
 
@@ -696,7 +729,7 @@ Verificação adicional:
 git diff --check
 ~~~
 
-# 18. Evidência operacional real em 29–30/09/2026
+# 18. Evidência operacional real em 29/09–01/10/2026
 
 ## Item 412
 
@@ -726,7 +759,7 @@ RECOVERY
 
 Esses casos comprovam integração real de Recovery, Vision, ArmoredIA, Studio, Hub, Telegram e cleanup.
 
-Na certificação histórica zerada, também foram observados, com publicação real e cleanup:
+Na certificação histórica anterior, também foram observados, com publicação real e cleanup:
 
 ~~~
 1383
@@ -748,11 +781,31 @@ O item 564 produziu avisos do decoder H.264 (mmco: unref short failure) durante 
 
 Esses resultados comprovam operação real, mas não substituem a prova específica de uma falha dentro da ArmoredIA seguida de Recovery direto na própria IA.
 
+## 18.1 Conteúdos LIVE reais observados em 01/10/2026
+
+Na fonte Telegram real `-1003788989075`, o Coordinator estava em modo LIVE e novos conteúdos entraram espontaneamente. Três conteúdos foram capturados e concluídos de ponta a ponta:
+
+~~~
+2444 -> download -> Vision -> ArmoredIA -> Studio/RVC -> Hub -> CONFIRMED -> PUBLISHED + cleanup
+2447 -> download -> Vision -> ArmoredIA -> Studio/RVC -> Hub -> CONFIRMED -> PUBLISHED + cleanup
+2448 -> download -> Vision -> ArmoredIA -> Studio/RVC -> Hub -> CONFIRMED -> PUBLISHED + cleanup
+~~~
+
+Registros finais observados no console:
+
+~~~
+[PIPELINE][ITEM 2444] FINALIZADO PUBLISHED+cleanup
+[PIPELINE][ITEM 2447] FINALIZADO PUBLISHED+cleanup
+[PIPELINE][ITEM 2448] FINALIZADO PUBLISHED+cleanup
+~~~
+
+Esta é evidência operacional real de conteúdo novo chegando em LIVE, sendo materializado e percorrendo Vision, ArmoredIA, Studio/RVC, Hub, confirmação Telegram e cleanup. A exigência de esperar indefinidamente por conteúdo espontâneo para comprovar o mecanismo LIVE está encerrada.
+
 ---
 
 # 19. Auditoria real de startup e estado persistente
 
-Resumo observado:
+Resumo observado anteriormente:
 
 ~~~
 120 itens inventariados
@@ -765,6 +818,24 @@ Resumo observado:
 76 publicações confirmadas
 5 ambíguas
 ~~~
+
+## 19.0 Snapshot operacional de 01/10/2026 antes da rodada LIVE
+
+Às `15:24:40`, antes dos três novos conteúdos LIVE desta rodada, o Startup Audit registrou:
+
+~~~
+itens                   = 310
+publicados              = 286
+pendentes               = 24
+falhos                  = 0
+limpos                  = 286
+workspaces              = 310
+órfãos                  = 0
+publicações_confirmadas = 286
+ambíguas                = 0
+~~~
+
+Depois desse snapshot, os itens `2444`, `2447` e `2448` foram processados e finalizaram com `PUBLISHED + cleanup`.
 
 Publicações históricas ambíguas foram verificadas conforme o contrato do Hub.
 
@@ -807,9 +878,9 @@ Esse procedimento criou um destino externo limpo sem apagar o histórico da font
 
 O teste histórico real preservou o histórico Telegram e observou a cadeia sequencial de descoberta, materialização, Vision, ArmoredIA, Studio, Hub, CONFIRMED, PUBLISHED e cleanup.
 
-A execução também registrou uma perda real de conectividade durante o item 697. O comportamento antigo observado terminou o processo após as tentativas de reconexão, com checkpoint preservado e sem transformar o item em PUBLISHED/FAILED definitivo.
+A execução também registrou uma perda real de conectividade durante o item 697. O checkpoint permaneceu preservado, o item não foi convertido indevidamente em PUBLISHED/FAILED definitivo e o processo pôde ser reiniciado mantendo o estado SQLite.
 
-A implementação atual adiciona tratamento de falhas transitórias no Coordinator e reconstrução do iterator no CATCH-UP, além de teste controlado da sobrevivência do loop LIVE. A perda real de internet deve ser repetida uma vez antes do freeze para gerar a evidência operacional correspondente.
+A implementação atual adiciona tratamento de falhas transitórias no Coordinator e reconstrução do iterator no CATCH-UP, além de teste controlado da sobrevivência do loop LIVE. A evidência real de 30/09 demonstrou interrupção durante materialização sem avanço indevido do checkpoint; o processo foi reiniciado com o estado SQLite preservado.
 
 O estado interno, os checkpoints e o histórico externo não devem ser zerados para realizar essa revalidação.
 
@@ -817,7 +888,9 @@ O estado interno, os checkpoints e o histórico externo não devem ser zerados p
 
 Chegar ao fim do iterador não basta.
 
-O mecanismo de cutover CATCH-UP -> LIVE está coberto por teste automatizado controlado. Não é necessário esperar conteúdo espontâneo novo no grupo fonte para fechar esta versão; um primeiro conteúdo LIVE real posterior será evidência operacional complementar.
+O mecanismo de cutover CATCH-UP -> LIVE está coberto por teste automatizado controlado e, em 01/10/2026, o processo recebeu conteúdo novo real em LIVE: `2444`, `2447` e `2448` chegaram a `PUBLISHED + cleanup`.
+
+A evidência espontânea de LIVE já existe. A certificação histórica da Fonte 1, incluindo a recuperação do grupo `450/451/452`, também foi concluída e auditada.
 
 Condição de entrada:
 
@@ -862,16 +935,16 @@ O freeze da versão atual depende de evidência, não apenas da existência de t
 [x] Coordinator permanece vivo diante de erro transitório em LIVE
 [x] reconexão/reset do iterator em CATCH-UP está coberto por teste
 [x] checkpoint permanece seguro durante a recuperação
-[ ] revalidação operacional de perda real de internet
+[x] revalidação operacional de perda real de internet
 
 [x] falha da ArmoredIA gera RECOVERY
 [x] Recovery da ArmoredIA volta diretamente para IA
 [x] Vision não é repetida nesse caso
 
-[ ] CATCH-UP histórico completo desde checkpoint zero
-[ ] nenhum candidato legítimo ficou para trás
-[ ] nenhum predecessor foi pulado
-[ ] checkpoints finais conferidos
+[x] CATCH-UP histórico completo desde checkpoint zero
+[x] nenhum candidato legítimo ficou para trás
+[x] nenhum predecessor foi pulado
+[x] checkpoints finais conferidos
 
 [x] WAITING_VISION ocorre somente para unresolved real da Vision V1
 [x] WAITING_VISION não bloqueia CATCH-UP
@@ -887,11 +960,12 @@ O freeze da versão atual depende de evidência, não apenas da existência de t
 [x] zero órfãos em testes/auditorias já executados
 
 [x] mecanismo controlado de CATCH-UP -> LIVE
-[ ] evidência operacional complementar de primeiro item LIVE real após CATCH-UP
+[x] evidência operacional de conteúdo LIVE real — 2444, 2447 e 2448
 
-[x] suíte automatizada verde antes desta branch final
-[ ] CI final verde desta branch
-[ ] README final atualizado com a evidência do freeze
+[x] suíte automatizada verde do código final — 175 passed, 1 skipped
+[x] CI verde do código final — runs #946 e #947
+[x] README atualizado com o snapshot e as pendências reais
+[ ] CI verde desta atualização documental
 [ ] versão congelada/tagueada
 ~~~
 
@@ -937,14 +1011,30 @@ checkpoint preservado após falha de materialização
 0 órfãos em Startup Audit observado
 ~~~
 
-## Evidência operacional ainda necessária
+## Evidência operacional concluída nesta fase
 
 ~~~
-revalidação real de perda temporária de internet com Coordinator permanecendo vivo
+revalidação real de perda temporária de internet
 CATCH-UP histórico completo desde checkpoint zero
+nenhum candidato legítimo ficou para trás
+nenhum predecessor foi pulado
 conferência dos checkpoints finais dos tópicos elegíveis
-CI final verde do commit de freeze
+recuperação específica do grupo 450/451/452
+registro do 5ardb8fozx no SQLite após a recuperação
 ~~~
+
+O grupo 450/451/452 foi recuperado como candidato `452`, publicado, confirmado e limpo. O histórico completo da Fonte 1 foi auditado sem apagar o banco ou o histórico Telegram.
+
+## Evidência LIVE já obtida
+
+~~~
+01/10/2026
+2444 -> PUBLISHED + cleanup
+2447 -> PUBLISHED + cleanup
+2448 -> PUBLISHED + cleanup
+~~~
+
+A evidência operacional de conteúdo espontâneo em LIVE está fechada. A pendência histórica do grupo 450/451/452 e do link 5ardb8fozx também está encerrada.
 
 ## Fora do escopo desta versão
 
@@ -1004,7 +1094,7 @@ O objetivo da certificação é provar que cada efeito externo, cada mudança de
 
 # 26. Escopo bloqueado antes do próximo grupo fonte
 
-A versão atual deve ser tratada como **Fonte 1 em certificação**.
+A versão atual deve ser tratada como **Fonte 1 certificada, pronta para o freeze após a validação final do README/CI e a criação da tag**.
 
 O grupo fonte atual permanece:
 
