@@ -13,11 +13,12 @@ from ArmoredSync.service import SyncMessage, TelegramSource
 
 
 class FakeMessage:
-    def __init__(self, message_id, video=False, text=""):
+    def __init__(self, message_id, video=False, text="", grouped_id=None):
         self.id = message_id
         self.video = video
         self.message = text
         self.entities = []
+        self.grouped_id = grouped_id
 
 
 class FakeReader:
@@ -157,6 +158,138 @@ class SyncLifecycleTests(unittest.TestCase):
         self.assertEqual([candidate[0] for candidate in candidates], [1, 3])
         self.assertEqual(candidates[0][4], "https://shopee.com.br/x/abc")
         self.assertEqual(candidates[1][4], "https://shopee.com.br/x/def")
+
+    def test_historical_candidate_resolves_shopee_from_same_grouped_album(self):
+        source = CandidateSource(Path("."), FakeReader())
+        source._topic_messages = None
+
+        async def grouped_messages(source_name, topic_id):
+            # Telegram history is newest-first: 452, 451, 450.
+            messages = [
+                FakeMessage(452, video=True, grouped_id=14295227350202649),
+                FakeMessage(451, text="", grouped_id=14295227350202649),
+                FakeMessage(
+                    450,
+                    text="https://s.shopee.com.br/5Ardb8fOzX",
+                    grouped_id=14295227350202649,
+                ),
+            ]
+            for message in messages:
+                yield message
+
+        source._topic_messages = grouped_messages
+
+        candidates = []
+
+        async def collect():
+            async for candidate in source._candidate_iterator("source", [(287, "topic")]):
+                candidates.append(candidate)
+
+        asyncio.run(collect())
+
+        self.assertEqual([candidate[0] for candidate in candidates], [452])
+        self.assertEqual(
+            candidates[0][4],
+            "https://s.shopee.com.br/5Ardb8fOzX",
+        )
+
+    def test_historical_grouped_two_videos_one_link_emits_one_candidate(self):
+        source = CandidateSource(Path("."), FakeReader())
+
+        async def grouped_messages(source_name, topic_id):
+            # Telegram history is newest-first: 493, 492, 491.
+            messages = [
+                FakeMessage(
+                    493,
+                    text="https://s.shopee.com.br/4fvTHpZbKQ",
+                    grouped_id=14295237464830177,
+                ),
+                FakeMessage(492, video=True, grouped_id=14295237464830169),
+                FakeMessage(
+                    491,
+                    video=True,
+                    text="https://s.shopee.com.br/8piEHew9WS",
+                    grouped_id=14295237464830169,
+                ),
+            ]
+            for message in messages:
+                yield message
+
+        source._topic_messages = grouped_messages
+        candidates = []
+
+        async def collect():
+            async for candidate in source._candidate_iterator("source", [(484, "topic")]):
+                candidates.append(candidate)
+
+        asyncio.run(collect())
+
+        self.assertEqual([candidate[0] for candidate in candidates], [491])
+        self.assertEqual(
+            candidates[0][4],
+            "https://s.shopee.com.br/8piEHew9WS",
+        )
+
+    def test_live_candidate_resolves_link_inside_group_and_advances_group_checkpoint(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            db.complete_historical_sync()
+            db.set_sync_topic_checkpoint(567, "topic", 99)
+
+            class Reader:
+                def __init__(self):
+                    self.connected = False
+
+                    class Client:
+                        async def iter_messages(inner, *args, **kwargs):
+                            messages = [
+                                FakeMessage(
+                                    100,
+                                    text="https://s.shopee.com.br/live-group",
+                                    grouped_id=123456,
+                                ),
+                                FakeMessage(
+                                    101,
+                                    text="",
+                                    grouped_id=123456,
+                                ),
+                                FakeMessage(
+                                    102,
+                                    video=True,
+                                    grouped_id=123456,
+                                ),
+                            ]
+                            for message in messages:
+                                yield message
+
+                    self.client = Client()
+
+                async def connect(self):
+                    self.connected = True
+
+                async def disconnect(self):
+                    self.connected = False
+
+            class LiveGroupedSource(TelegramSource):
+                async def _discover_topics(self, source):
+                    return [(567, "topic")]
+
+            reader = Reader()
+            source = LiveGroupedSource(root, reader, db)
+
+            message, checkpoints = asyncio.run(source.fetch_live_candidate_async())
+
+            self.assertIsNotNone(message)
+            self.assertEqual(message.telegram_message_id, "102")
+            self.assertEqual(
+                message.original_url,
+                "https://s.shopee.com.br/live-group",
+            )
+            self.assertEqual(checkpoints, {567: 102})
+
+            db.close()
 
     def test_coordinator_runs_history_then_live_with_same_source(self):
         with tempfile.TemporaryDirectory() as td:
