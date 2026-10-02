@@ -1,6 +1,6 @@
 # ArmoredCreator — Arquitetura Final, Contrato Operacional e Certificação
 
-> **Snapshot de certificação — 01/10/2026:** código final em `5f4ac10d`; suíte local `175 passed, 1 skipped`; CI do código final (`#946` e `#947`) verde. O modo LIVE já foi comprovado com conteúdo novo real. A certificação histórica do grupo `450/451/452` foi concluída e comprovada ponta a ponta.
+> **Snapshot final certificado:** commit de código `69fb9a5fc771298dafc04fdc420ff1a0bd8ec227`; suíte local `175 passed, 1 skipped`; CI do código final verde; CI pós-merge `#952` verde; LIVE real comprovado; grupo `450/451/452` fechado e comprovado ponta a ponta; versão congelada em `v1.0.0-certified`.
 
 > Laboratório de reconstrução e certificação: armoredcreator/armoredcreator-test.
 > O repositório oficial armoredcreator/armoredcreator e a branch audit/baseline-2026-09-19 permanecem intocados.
@@ -906,16 +906,6 @@ histórico esgotado
 
 Recovery pendente não pode ser ignorado para entrar em LIVE.
 
-# 22. Vision V2
-
-Vision V2 está fora desta versão.
-
-Não fazem parte do fluxo atual discovery de equivalentes, pacote de múltiplos links ou CandidateDiscovery.
-
-Uma futura V2 deve voltar isoladamente, com nova certificação.
-
----
-
 # 23. Critérios de fechamento histórico
 
 O freeze da versão atual depende de evidência, não apenas da existência de testes unitários.
@@ -965,8 +955,8 @@ O freeze da versão atual depende de evidência, não apenas da existência de t
 [x] suíte automatizada verde do código final — 175 passed, 1 skipped
 [x] CI verde do código final — runs #946 e #947
 [x] README atualizado com o snapshot e as pendências reais
-[ ] CI verde desta atualização documental
-[ ] versão congelada/tagueada
+[x] CI verde desta atualização documental
+[x] versão congelada/tagueada — `v1.0.0-certified`
 ~~~
 
 # 24. Estado de certificação
@@ -1040,7 +1030,6 @@ A evidência operacional de conteúdo espontâneo em LIVE está fechada. A pend�
 
 ~~~
 Hub Preflight
-Vision V2
 espera por conteúdo LIVE espontâneo como condição de freeze
 ~~~
 
@@ -1094,7 +1083,7 @@ O objetivo da certificação é provar que cada efeito externo, cada mudança de
 
 # 26. Escopo bloqueado antes do próximo grupo fonte
 
-A versão atual deve ser tratada como **Fonte 1 certificada, pronta para o freeze após a validação final do README/CI e a criação da tag**.
+A versão atual é a **Fonte 1 certificada e congelada**. O commit certificado é `69fb9a5fc771298dafc04fdc420ff1a0bd8ec227` e a tag oficial é `v1.0.0-certified`.
 
 O grupo fonte atual permanece:
 
@@ -1105,7 +1094,7 @@ ARMORED_SYNC_SOURCE_ID=-1003788989075
 
 Qualquer segundo grupo fonte será **aditivo** e jamais substituirá a Fonte 1.
 
-Antes de implementar a Fonte 2, o ciclo da Fonte 1 deve concluir a certificação histórica desta versão, incluindo CATCH-UP completo e a transição para LIVE.
+A Fonte 1 está encerrada para esta versão. Qualquer nova fonte ou mudança funcional deverá ser tratada como novo ciclo de desenvolvimento, sem alterar a versão certificada.
 
 A Fonte 2 deverá ter seus próprios parâmetros e checkpoints sem romper o princípio global de um único item ativo. O comportamento do Sync atual de descobrir os tópicos do fórum também deve continuar explícito: ARMORED_SYNC_TOPIC_NAME não é hoje um filtro exclusivo.
 
@@ -1115,4 +1104,6 @@ A Fonte 2 deverá ter seus próprios parâmetros e checkpoints sem romper o prin
 
 O baseline oficial continua intocado.
 
-Qualquer mudança futura deve ser isolada em branch própria, passar pela suíte completa, passar por git diff --check e obter evidência operacional antes de ser tratada como fechada.
+A versão certificada atual é a referência funcional única deste repositório. Não há branches de desenvolvimento necessários para executar a versão certificada.
+
+Qualquer mudança futura deve ser isolada em branch própria, passar pela suíte completa, passar por `git diff --check` e obter evidência operacional antes de ser tratada como uma nova versão.
