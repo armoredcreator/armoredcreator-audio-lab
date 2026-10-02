@@ -66,7 +66,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
                 coordinator=Coordinator.build(root, Bindings(Source(source),Vision(),CrashStudio(ArmoredStudio(root)),publisher))
                 item_id=coordinator.ingest_once()
                 with self.assertRaises(RuntimeError): coordinator.run(item_id)
-                self.assertEqual(coordinator.db.get(item_id).state,State.FAILED)
+                self.assertEqual(coordinator.db.get(item_id).state,State.RECOVERY)
                 coordinator.close()
                 coordinator=Coordinator.build(root, Bindings(Source(source),Vision(),ArmoredStudio(root),publisher))
                 coordinator.recover(item_id)
@@ -77,7 +77,7 @@ class EndToEndRecoveryTests(unittest.TestCase):
                 self.assertEqual([p.name for p in row.workspace.iterdir()],[row.original_path.name])
                 events=[r["new_state"] for r in coordinator.db.conn.execute("SELECT new_state FROM state_events WHERE content_id=? ORDER BY id",(item_id,)).fetchall()]
                 self.assertIn(State.VISION.value,events); self.assertIn(State.STUDIO.value,events)
-                self.assertIn(State.PUBLISHING.value,events); self.assertIn(State.FAILED.value,events)
+                self.assertIn(State.PUBLISHING.value,events); self.assertIn(State.RECOVERY.value,events)
                 coordinator.close()
         finally:
             os.environ.pop("ARMORED_STUDIO_ALLOW_COPY",None); os.environ.pop("ARMORED_STUDIO_FORCE_COPY",None)
@@ -308,12 +308,14 @@ class EndToEndRecoveryTests(unittest.TestCase):
                             "local",
                             original_url="https://example.invalid/product",
                         )
-                    return SourceMessage(
-                        self.path,
-                        "e2e-501",
-                        "local",
-                        original_url="https://example.invalid/product",
-                    )
+                    if self.calls == 2:
+                        return SourceMessage(
+                            self.path,
+                            "e2e-501",
+                            "local",
+                            original_url="https://example.invalid/product",
+                        )
+                    return None
 
             catch_up_source = CatchUpSource(source_file)
             coordinator.source = catch_up_source
@@ -326,15 +328,94 @@ class EndToEndRecoveryTests(unittest.TestCase):
                 )
 
             coordinator.run = enter_recovery
+            recovery_calls = []
+
+            def recover_for_normal_path(content_id):
+                recovery_calls.append(str(content_id))
+                raise RuntimeError("publication-check-uncertain-recovery-stopped")
+
+            coordinator.recover = recover_for_normal_path
+
+            processed = __import__("asyncio").run(coordinator.run_catch_up_async())
+
+            # CATCH-UP must finish its historical scan before the separate
+            # Recovery phase. An unresolved RECOVERY item blocks checkpoint
+            # advancement, but does not prevent later candidates from being
+            # scanned in the same CATCH-UP pass.
+            self.assertEqual(processed, [str(item_id), "e2e-501"])
+            self.assertEqual(catch_up_source.calls, 3)
+            self.assertEqual(recovery_calls, [])
+            self.assertEqual(coordinator.db.get(item_id).state, State.RECOVERY)
+            self.assertEqual(coordinator.db.get("e2e-501").state, State.RECOVERY)
+            coordinator.close()
+
+
+    def test_catch_up_stops_when_pipeline_raises_after_entering_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            source_file = input_dir / "e2e-502.mp4"
+            source_file.write_bytes(b"RECOVERY-RAISE")
+
+            initial_source = Source(source_file)
+            coordinator = Coordinator.build(
+                root,
+                Bindings(initial_source, Vision(), ArmoredStudio(root), PersistentPublisher()),
+            )
+            item_id = coordinator.ingest_once()
+
+            from armored_core.production_contracts import SourceMessage
+
+            class CatchUpSource:
+                _historical_limit = None
+                historical_materialization_failed = False
+                historical_scan_exhausted = False
+
+                def __init__(self, path):
+                    self.path = path
+                    self.calls = 0
+
+                async def fetch_next_async(self):
+                    self.calls += 1
+                    if self.calls == 1:
+                        return SourceMessage(
+                            self.path,
+                            str(item_id),
+                            "local",
+                            original_url="https://example.invalid/product",
+                        )
+                    if self.calls == 2:
+                        return SourceMessage(
+                            self.path,
+                            "e2e-503",
+                            "local",
+                            original_url="https://example.invalid/product",
+                        )
+                    return None
+
+            catch_up_source = CatchUpSource(source_file)
+            coordinator.source = catch_up_source
+
+            def pipeline_failure(content_id):
+                coordinator.db.transition(
+                    content_id,
+                    State.RECOVERY,
+                    "test-pipeline-raised-after-recovery",
+                )
+                raise RuntimeError("simulated recoverable pipeline failure")
+
+            coordinator.run = pipeline_failure
             coordinator.recover = lambda content_id: (_ for _ in ()).throw(
                 RuntimeError("publication-check-uncertain-recovery-stopped")
             )
 
             processed = __import__("asyncio").run(coordinator.run_catch_up_async())
 
-            self.assertEqual(processed, [str(item_id)])
-            self.assertEqual(catch_up_source.calls, 1)
+            self.assertEqual(processed, [str(item_id), "e2e-503"])
+            self.assertEqual(catch_up_source.calls, 3)
             self.assertEqual(coordinator.db.get(item_id).state, State.RECOVERY)
+            self.assertEqual(coordinator.db.get("e2e-503").state, State.RECOVERY)
             coordinator.close()
 
 

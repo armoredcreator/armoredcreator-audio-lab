@@ -107,6 +107,32 @@ class StartupAuditTests(unittest.TestCase):
 
             db.close()
 
+    def test_startup_migrates_legacy_caption_waiting_to_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            original = storage.original("412", original_url="https://shopee.com.br/412")
+            original.write_bytes(b"ORIGINAL")
+
+            db = Database(storage.database / "armoredcreator.db")
+            item_id = db.create_item("412", original, original_url="https://shopee.com.br/412")
+            db.mark_vision_waiting(
+                item_id,
+                "Gemini não conseguiu gerar uma legenda válida após 5 tentativa(s)",
+            )
+
+            summary = StartupReconciler(db, storage).run()
+
+            self.assertEqual(db.get(item_id).state, State.RECOVERY)
+            event = db.last_state_event(item_id)
+            self.assertEqual(event["new_state"], State.RECOVERY.value)
+            self.assertEqual(
+                event["reason"],
+                "legacy-caption-waiting-vision-migrated-to-recovery",
+            )
+            self.assertEqual(summary["pending"], 1)
+            db.close()
+
     def test_startup_audit_refreshes_publication_state_after_reconciliation(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

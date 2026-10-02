@@ -46,31 +46,6 @@ class Database:
             reason TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE TABLE IF NOT EXISTS vision_candidates (
-            candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content_id TEXT NOT NULL,
-            candidate_order INTEGER NOT NULL,
-            source_type TEXT NOT NULL,
-            source_url TEXT,
-            product_link TEXT,
-            affiliate_url TEXT,
-            shop_id TEXT,
-            item_id TEXT,
-            product_name TEXT,
-            shop_name TEXT,
-            image_url TEXT,
-            category_ids_json TEXT NOT NULL DEFAULT '[]',
-            price_min REAL,
-            price_max REAL,
-            score REAL NOT NULL DEFAULT 0,
-            decision TEXT NOT NULL,
-            reason TEXT,
-            evidence_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(content_id, candidate_order)
-        );
-        CREATE INDEX IF NOT EXISTS idx_vision_candidates_content
-            ON vision_candidates(content_id);
 
         CREATE TABLE IF NOT EXISTS publications (
             content_id TEXT PRIMARY KEY,
@@ -95,6 +70,21 @@ class Database:
             last_seen_message_id INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS caption_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT NOT NULL,
+            batch_id TEXT NOT NULL,
+            candidate_index INTEGER NOT NULL,
+            caption TEXT NOT NULL,
+            policy_valid INTEGER NOT NULL,
+            rejection_reason TEXT,
+            score REAL NOT NULL DEFAULT 0,
+            selected INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(content_id, batch_id, candidate_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_caption_candidates_content
+            ON caption_candidates(content_id, created_at);
         CREATE TABLE IF NOT EXISTS runtime_locks (
             name TEXT PRIMARY KEY,
             pid INTEGER NOT NULL,
@@ -106,6 +96,8 @@ class Database:
         self._migrate_columns()
 
     def _migrate_columns(self) -> None:
+        # Legacy Vision evidence tables, when present in an existing database,
+        # are preserved. Migrations must never destroy historical audit data.
         migrations = {
             "items": [
                 ("source_id", "ALTER TABLE items ADD COLUMN source_id TEXT NOT NULL DEFAULT 'telegram'"),
@@ -114,6 +106,7 @@ class Database:
                 ("original_url", "ALTER TABLE items ADD COLUMN original_url TEXT"),
                 ("original_sha256", "ALTER TABLE items ADD COLUMN original_sha256 TEXT"),
                 ("publication_caption", "ALTER TABLE items ADD COLUMN publication_caption TEXT"),
+                ("ia_context_json", "ALTER TABLE items ADD COLUMN ia_context_json TEXT NOT NULL DEFAULT '{}'"),
                 ("affiliate_urls_json", "ALTER TABLE items ADD COLUMN affiliate_urls_json TEXT NOT NULL DEFAULT '[]'"),
                 ("attempts", "ALTER TABLE items ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
                 ("recovery_count", "ALTER TABLE items ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
@@ -261,7 +254,25 @@ class Database:
             row["original_sha256"], row["attempts"], row["recovery_count"], bool(row["cleanup_completed"]),
             row["publication_caption"],
             tuple(json.loads(row["affiliate_urls_json"] or "[]")),
+            json.loads(row["ia_context_json"] or "{}"),
         )
+
+    def last_state_event(self, item_id: str):
+        row = self.conn.execute(
+            "SELECT old_state, new_state, reason, created_at "
+            "FROM state_events WHERE content_id=? ORDER BY id DESC LIMIT 1",
+            (str(item_id),),
+        ).fetchone()
+        return row
+
+    def last_error(self, item_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT last_error FROM items WHERE content_id=?", (str(item_id),)
+        ).fetchone()
+        if row is None:
+            raise KeyError(item_id)
+        value = row["last_error"]
+        return str(value) if value is not None else None
 
     def record_attempt(self, item_id: str) -> None:
         self.conn.execute(
@@ -308,7 +319,7 @@ class Database:
         affiliate_url: str,
         affiliate_urls=(),
         publication_caption: str | None = None,
-        candidate_records=(),
+        ia_context: dict | None = None,
     ) -> None:
         links = [str(link).strip() for link in (affiliate_urls or ()) if str(link).strip()]
         if not links and affiliate_url:
@@ -316,55 +327,67 @@ class Database:
 
         self.conn.execute(
             "UPDATE items SET affiliate_name=?, affiliate_url=?, publication_caption=?, "
-            "affiliate_urls_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            "affiliate_urls_json=?, ia_context_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
             (
                 affiliate_name,
                 affiliate_url,
                 publication_caption,
                 json.dumps(list(dict.fromkeys(links)), ensure_ascii=False),
+                json.dumps(ia_context or {}, ensure_ascii=False, default=str),
                 item_id,
             ),
         )
-        self.conn.execute(
-            "DELETE FROM vision_candidates WHERE content_id=?",
-            (str(item_id),),
-        )
-        for record in candidate_records or ():
-            self.conn.execute(
-                "INSERT INTO vision_candidates("
-                "content_id,candidate_order,source_type,source_url,product_link,"
-                "affiliate_url,shop_id,item_id,product_name,shop_name,image_url,"
-                "category_ids_json,price_min,price_max,score,decision,reason,evidence_json"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    str(item_id),
-                    int(record.get("candidate_order", 0)),
-                    str(record.get("source_type", "")),
-                    str(record.get("source_url", "")),
-                    str(record.get("product_link", "")),
-                    str(record.get("affiliate_url", "")),
-                    str(record.get("shop_id", "")),
-                    str(record.get("item_id", "")),
-                    str(record.get("product_name", "")),
-                    str(record.get("shop_name", "")),
-                    str(record.get("image_url", "")),
-                    json.dumps(record.get("category_ids", []), ensure_ascii=False),
-                    record.get("price_min"),
-                    record.get("price_max"),
-                    float(record.get("score", 0.0)),
-                    str(record.get("decision", "DISCOVERED")),
-                    str(record.get("reason", "")),
-                    json.dumps(record.get("evidence", {}), ensure_ascii=False),
-                ),
-            )
         self.conn.commit()
 
-    def vision_candidates(self, item_id: str):
-        rows = self.conn.execute(
-            "SELECT * FROM vision_candidates WHERE content_id=? ORDER BY candidate_order",
-            (str(item_id),),
+
+    def set_ia_context(self, item_id: str, context: dict | None) -> None:
+        self.conn.execute(
+            "UPDATE items SET ia_context_json=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (json.dumps(context or {}, ensure_ascii=False, default=str), str(item_id)),
+        )
+        self.conn.commit()
+
+    def set_caption(self, item_id: str, caption: str) -> None:
+        self.conn.execute(
+            "UPDATE items SET publication_caption=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (str(caption), str(item_id)),
+        )
+        self.conn.commit()
+
+    def record_caption_candidates(self, item_id: str, batch_id: str, evaluations) -> None:
+        """Persist every caption candidate and its local Policy/ranking decision."""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO caption_candidates "
+            "(content_id,batch_id,candidate_index,caption,policy_valid,rejection_reason,score,selected) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (
+                    str(item_id),
+                    str(batch_id),
+                    int(evaluation.index),
+                    str(evaluation.caption),
+                    1 if evaluation.policy_valid else 0,
+                    evaluation.rejection_reason,
+                    float(evaluation.score),
+                    1 if evaluation.selected else 0,
+                )
+                for evaluation in evaluations
+            ],
+        )
+        self.conn.commit()
+
+    def caption_candidates(self, item_id: str, batch_id: str | None = None):
+        if batch_id is None:
+            return self.conn.execute(
+                "SELECT * FROM caption_candidates "
+                "WHERE content_id=? ORDER BY created_at, candidate_index",
+                (str(item_id),),
+            ).fetchall()
+        return self.conn.execute(
+            "SELECT * FROM caption_candidates "
+            "WHERE content_id=? AND batch_id=? ORDER BY candidate_index",
+            (str(item_id), str(batch_id)),
         ).fetchall()
-        return [dict(row) for row in rows]
 
     def set_working(self, item_id: str, path: Path | None) -> None:
         self.conn.execute(
@@ -413,6 +436,15 @@ class Database:
             "updated_at=CURRENT_TIMESTAMP",
             (str(item_id), f"armoredcreator:content:{str(item_id)}",
              destination_chat_id, destination_topic_id),
+        )
+        self.conn.commit()
+
+    def publication_send_started(self, item_id: str) -> None:
+        """Persist that the external Telegram send has entered its side-effect window."""
+        self.conn.execute(
+            "UPDATE publications SET verification_status='SENT_UNVERIFIED', updated_at=CURRENT_TIMESTAMP "
+            "WHERE content_id=?",
+            (str(item_id),),
         )
         self.conn.commit()
 

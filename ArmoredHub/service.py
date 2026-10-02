@@ -26,14 +26,6 @@ class ArmoredHub:
 
     @staticmethod
     def _run_async(coro):
-        """Run an async Telegram operation without nesting asyncio.run().
-
-        Coordinator keeps one production event loop alive for the whole
-        process. Hub's public API is intentionally synchronous, so Telegram
-        MTProto/Bot coroutines execute in a short-lived worker thread when
-        called from that live loop. This prevents the persistent Coordinator
-        loop from being replaced and avoids creating un-awaited coroutines.
-        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -43,13 +35,6 @@ class ArmoredHub:
             return executor.submit(asyncio.run, coro).result()
 
     def check_publication(self, item: Item) -> PublicationCheck:
-        """Reconcile the durable publication record with Telegram.
-
-        A successful Bot API send is authoritative when it returns a real
-        message_id. This method is primarily the recovery path for ambiguous
-        sends, such as a network timeout after Telegram accepted the upload.
-        It never treats an unavailable query as proof of absence.
-        """
         record = self._publication(item)
         if record is None:
             return PublicationCheck.UNKNOWN
@@ -77,6 +62,8 @@ class ArmoredHub:
 
         attempts = max(1, int(os.getenv("ARMORED_TELEGRAM_VERIFY_ATTEMPTS", "3")))
         delay = max(0.0, float(os.getenv("ARMORED_TELEGRAM_VERIFY_RETRY_DELAY", "2")))
+        send_started = str(record["verification_status"] or "") == "SENT_UNVERIFIED"
+
         for attempt in range(1, attempts + 1):
             matches = self._find_telegram_publications(item)
             if matches is not None:
@@ -89,26 +76,35 @@ class ArmoredHub:
                         f"multiple exact matches={len(matches)}"
                     )
                     return PublicationCheck.UNKNOWN
+
                 if attempt < attempts and delay:
                     time.sleep(delay)
                     continue
+                # Once an external send has started, absence of
+                # Telegram evidence is not proof that the publication did not
+                # happen. Keep the item UNKNOWN so recovery cannot republish
+                # through an unresolved external side-effect window.
+                if send_started:
+                    print(
+                        f"[HUB][VERIFY][UNKNOWN] item={item.content_id} "
+                        "send already started; no exact Telegram evidence"
+                    )
+                    return PublicationCheck.UNKNOWN
                 return PublicationCheck.ABSENT
+
             print(
                 f"[HUB][VERIFY] item={item.content_id} "
                 f"attempt={attempt}/{attempts} returned UNKNOWN"
             )
             if attempt < attempts and delay:
                 time.sleep(delay)
+
         return PublicationCheck.UNKNOWN
 
     def publish_once(self, item: Item) -> PublicationResult:
-        """Ensure exactly one external publication for this content."""
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
 
-        # A brand-new publication intent has no prior external attempt to
-        # reconcile, so go directly to the Bot API. Existing intents still
-        # require the full Telegram reconciliation path.
         existing = self._publication(item)
         self.db.publication_started(item.item_id)
         check = PublicationCheck.ABSENT if existing is None else self.check_publication(item)
@@ -117,9 +113,7 @@ class ArmoredHub:
             record = self._publication(item)
             message_id = record["published_message_id"] if record else None
             if not message_id:
-                raise PublicationUnknownError(
-                    "publication-confirmed-without-real-message-id"
-                )
+                raise PublicationUnknownError("publication-confirmed-without-real-message-id")
             return PublicationResult(True, str(message_id))
 
         if check == PublicationCheck.UNKNOWN:
@@ -128,17 +122,9 @@ class ArmoredHub:
         return self.publish(item)
 
     def _telegram_session_path(self) -> Path:
-        """Reuse the existing ArmoredSync user session for destination discovery."""
         return self.root / "credentials" / "telegram" / "session" / "armoredsync"
 
     def _resolve_destination_chat_id(self, topic_id: str | int | None = None) -> str | None:
-        """Resolve the destination forum's parent chat when its ID is not configured.
-
-        The backup contract fixes the publication topic as 228, but the parent
-        group ID is not stored in the repository. When ARMORED_CREATOR_GROUP_ID
-        is absent, inspect the already-authenticated Telegram user session and
-        find the unique forum containing the configured topic.
-        """
         configured = (os.getenv("ARMORED_CREATOR_GROUP_ID") or "").strip()
         if configured:
             self._destination_chat_id = configured
@@ -147,7 +133,7 @@ class ArmoredHub:
         if self._destination_chat_id:
             return self._destination_chat_id
 
-        topic_value = str(topic_id or (os.getenv("ARMORED_HUB_TOPIC_ID") or "228")).strip()
+        topic_value = str(topic_id or (os.getenv("ARMORED_HUB_TOPIC_ID") or "")).strip()
         if not topic_value or not topic_value.lstrip("-").isdigit():
             raise RuntimeError("ARMORED_HUB_TOPIC_ID inválido para descoberta automática")
 
@@ -185,13 +171,8 @@ class ArmoredHub:
                     entity = getattr(dialog, "entity", None)
                     if entity is None:
                         continue
-
-                    # Telegram forum topics belong to supergroups/channels
-                    # represented by Channel entities. Avoid scanning users,
-                    # private chats and ordinary groups.
                     if not bool(getattr(entity, "megagroup", False) or getattr(entity, "forum", False)):
                         continue
-
                     try:
                         result = await client(
                             functions.messages.GetForumTopicsRequest(
@@ -204,10 +185,7 @@ class ArmoredHub:
                             )
                         )
                     except Exception:
-                        # Some dialogs visible to the user may not expose forum
-                        # topics to this account. They are simply not candidates.
                         continue
-
                     for topic in getattr(result, "topics", []) or []:
                         if str(getattr(topic, "id", "")) == topic_value:
                             matches.append(str(dialog.id))
@@ -261,34 +239,43 @@ class ArmoredHub:
         if len(text) > 1024:
             raise RuntimeError("Hub caption/publication package excede 1024 caracteres")
         return text
-    def _telegram_publication_matches(self, message, item: Item, topic_id: int) -> bool:
-        """Require exact caption, exact topic and actual video media."""
-        if self._topic_id(message) != int(topic_id):
+
+    def _telegram_publication_matches(
+        self,
+        message,
+        item: Item,
+        topic_id: int,
+        topic_scoped: bool = False,
+        allow_unknown_topic: bool = False,
+    ) -> bool:
+        """Require exact publication text/media and, when available, the expected topic."""
+        message_topic = self._topic_id(message)
+        if message_topic is not None and message_topic != int(topic_id):
+            return False
+        if message_topic is None and not (topic_scoped or allow_unknown_topic):
             return False
 
         caption = str(getattr(message, "message", "") or "").strip()
-        expected = self._publication_text(item)
-        if caption != expected:
+        if caption != self._publication_text(item):
             return False
 
         if not getattr(message, "video", None) and not getattr(message, "document", None):
             return False
 
-        # Telegram may rewrite or omit uploaded filenames. Filename is
-        # auxiliary metadata only and must never invalidate an otherwise
-        # exact publication match (topic + caption + media).
         return True
 
     def _find_telegram_publications(self, item: Item) -> list[str] | None:
-        """Reconcile by exact topic history, then use text search as fallback.
+        """Find an exact publication without trusting incomplete forum metadata.
 
-        Topic history is stronger than server-side text search because it does
-        not depend on Telegram search indexing. Telethon exposes topic replies
-        through iter_messages(..., reply_to=topic_id).
+        A topic-scoped query is authoritative for topic membership. For global
+        history/search fallbacks, Telegram may omit reply_to_top_id. In that
+        case an exact caption+media match is only a candidate; the candidate's
+        message_id is fetched again through _verify_telegram_message(), which
+        validates the actual Telegram message before confirmation.
         """
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not api_id or not api_hash or not topic_id:
             return None
 
@@ -301,7 +288,6 @@ class ArmoredHub:
             )
             return None
         if not chat_id:
-            print(f"[HUB][VERIFY][UNKNOWN] item={item.content_id}: destination chat unavailable")
             return None
 
         affiliate = str(item.affiliate_url or "").strip()
@@ -329,20 +315,63 @@ class ArmoredHub:
                     return None
 
                 entity = await client.get_entity(int(chat_id))
-                exact_matches: list[str] = []
+                scoped_matches: list[str] = []
+                fallback_candidates: list[str] = []
 
                 async for message in client.iter_messages(
                     entity,
                     limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_HISTORY_LIMIT", "200")),
                     reply_to=int(topic_id),
                 ):
-                    if self._telegram_publication_matches(message, item, int(topic_id)):
+                    if self._telegram_publication_matches(
+                        message, item, int(topic_id), topic_scoped=True
+                    ):
                         message_id = str(getattr(message, "id", ""))
                         if message_id:
-                            exact_matches.append(message_id)
+                            scoped_matches.append(message_id)
 
-                if exact_matches:
-                    return sorted(set(exact_matches))
+                if scoped_matches:
+                    return sorted(set(scoped_matches))
+
+                if query:
+                    async for message in client.iter_messages(
+                        entity,
+                        search=query,
+                        limit=int(os.getenv("ARMORED_TELEGRAM_VERIFY_SEARCH_LIMIT", "100")),
+                    ):
+                        if self._telegram_publication_matches(
+                            message,
+                            item,
+                            int(topic_id),
+                            topic_scoped=False,
+                            allow_unknown_topic=True,
+                        ):
+                            message_id = str(getattr(message, "id", ""))
+                            if message_id:
+                                fallback_candidates.append(message_id)
+
+                recent_limit = int(os.getenv("ARMORED_TELEGRAM_VERIFY_RECENT_LIMIT", "200"))
+                async for message in client.iter_messages(entity, limit=recent_limit):
+                    if self._telegram_publication_matches(
+                        message,
+                        item,
+                        int(topic_id),
+                        topic_scoped=False,
+                        allow_unknown_topic=True,
+                    ):
+                        message_id = str(getattr(message, "id", ""))
+                        if message_id:
+                            fallback_candidates.append(message_id)
+
+                candidates = sorted(set(fallback_candidates))
+                if len(candidates) > 1:
+                    return candidates
+
+                if len(candidates) == 1:
+                    # The global search/history result is only a candidate when
+                    # Telegram omitted topic metadata. Re-read the exact message
+                    # by ID before treating it as proof of publication.
+                    return candidates
 
                 if not query:
                     return []
@@ -352,7 +381,7 @@ class ArmoredHub:
                         peer=entity,
                         q=query,
                         from_id=None,
-                        top_msg_id=int(topic_id),
+                        top_msg_id=0,
                         filter=InputMessagesFilterEmpty(),
                         min_date=None,
                         max_date=None,
@@ -365,24 +394,29 @@ class ArmoredHub:
                     )
                 )
                 for message in getattr(result, "messages", []) or []:
-                    if self._telegram_publication_matches(message, item, int(topic_id)):
+                    if self._telegram_publication_matches(
+                        message,
+                        item,
+                        int(topic_id),
+                        topic_scoped=False,
+                        allow_unknown_topic=True,
+                    ):
                         message_id = str(getattr(message, "id", ""))
                         if message_id:
-                            exact_matches.append(message_id)
+                            fallback_candidates.append(message_id)
 
-                return sorted(set(exact_matches))
+                return sorted(set(fallback_candidates))
             finally:
                 if client.is_connected():
                     await client.disconnect()
 
         try:
-            result = self._run_async(find())
-            count = len(result) if result is not None else "UNKNOWN"
+            candidates = self._run_async(find())
+            count = len(candidates) if candidates is not None else "UNKNOWN"
             print(
                 f"[HUB][VERIFY] item={item.content_id} query={query!r} "
                 f"topic={topic_id} chat={chat_id} matches={count}"
             )
-            return result
         except Exception as exc:
             print(
                 f"[HUB][VERIFY][UNKNOWN] item={item.content_id} query={query!r}: "
@@ -390,11 +424,22 @@ class ArmoredHub:
             )
             return None
 
+        if candidates is None or len(candidates) != 1:
+            return candidates
+
+        # A single unscoped candidate must be verified by its own message ID.
+        # This is the positive evidence path when forum reply metadata is absent.
+        status = self._verify_telegram_message(str(candidates[0]), item)
+        if status is True:
+            return [str(candidates[0])]
+        if status is False:
+            return []
+        return None
+
     def _verify_telegram_message(self, message_id: str, item: Item) -> bool | None:
-        """Verify the exact destination message; None means UNKNOWN."""
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not message_id or not api_id or not api_hash or not topic_id:
             return None
         try:
@@ -419,7 +464,7 @@ class ArmoredHub:
                 message = await client.get_messages(int(chat_id), ids=int(message_id))
                 if message is None:
                     return False
-                return self._telegram_publication_matches(message, item, int(topic_id))
+                return self._telegram_publication_matches(message, item, int(topic_id), topic_scoped=True)
             finally:
                 if client.is_connected():
                     await client.disconnect()
@@ -457,7 +502,6 @@ class ArmoredHub:
 
     @staticmethod
     def _video_metadata(output: Path) -> tuple[int, int, int]:
-        """Read real video geometry/duration before sending it to Telegram."""
         try:
             import cv2
         except ImportError as exc:
@@ -467,7 +511,6 @@ class ArmoredHub:
         try:
             if not capture.isOpened():
                 raise RuntimeError("Não foi possível abrir o vídeo para leitura de metadados")
-
             width = int(round(capture.get(cv2.CAP_PROP_FRAME_WIDTH)))
             height = int(round(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
             frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -485,7 +528,7 @@ class ArmoredHub:
 
     def _publish_telegram(self, item: Item, output: Path) -> PublicationResult:
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "228").strip()
+        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
         if not token or not topic_id:
             raise RuntimeError(
                 "Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN e ARMORED_HUB_TOPIC_ID"
@@ -515,7 +558,14 @@ class ArmoredHub:
                 write_timeout=float(os.getenv("ARMORED_TELEGRAM_WRITE_TIMEOUT", "180")),
                 pool_timeout=float(os.getenv("ARMORED_TELEGRAM_POOL_TIMEOUT", "15")),
             )
-            bot = Bot(token=token, request=request)
+            bot_api_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_URL") or "").strip()
+            bot_api_file_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_FILE_URL") or "").strip()
+            bot_kwargs = {"request": request}
+            if bot_api_url:
+                bot_kwargs["base_url"] = bot_api_url
+            if bot_api_file_url:
+                bot_kwargs["base_file_url"] = bot_api_file_url
+            bot = Bot(token=token, **bot_kwargs)
             try:
                 with output.open("rb") as handle:
                     return await bot.send_video(
@@ -531,14 +581,18 @@ class ArmoredHub:
             finally:
                 await bot.shutdown()
 
+        self.db.publication_send_started(item.item_id)
+
         try:
             message = self._run_async(send())
         except (TimedOut, NetworkError) as exc:
-            # The Bot API timeout is an ambiguous side-effect window: Telegram
-            # may have accepted the upload but the HTTP response may have been
-            # lost. Reconcile through the independent MTProto read-back before
-            # declaring UNKNOWN. Never republish automatically from this path.
             status = self.check_publication(item)
+            print(
+                f"[HUB][TELEGRAM][SEND_ERROR] item={item.content_id} "
+                f"exception={type(exc).__name__} message={str(exc)!r} "
+                f"reconciliation={status.value} decision="
+                f"{'CONFIRMED' if status == PublicationCheck.CONFIRMED else 'UNKNOWN'}"
+            )
             if status == PublicationCheck.CONFIRMED:
                 publication = self._publication(item)
                 message_id = publication["published_message_id"] if publication else None
@@ -550,17 +604,11 @@ class ArmoredHub:
         if message_id is None:
             raise RuntimeError("Telegram não retornou message_id")
 
-        # This is the critical crash window: persist the real Telegram ID
-        # before any post-send code can fail. The row remains unconfirmed.
         self.db.publication_message_sent(item.item_id, str(message_id))
 
         if os.getenv("ARMORED_TEST_CRASH_AFTER_TELEGRAM_SEND", "0") == "1":
             raise RuntimeError("TEST_CRASH_AFTER_TELEGRAM_SEND")
 
-        # A successful Bot API response is the authoritative external
-        # acknowledgement: Telegram returned the real message ID. Persist it
-        # and confirm immediately. MTProto reconciliation is reserved for the
-        # ambiguous timeout/network window above.
         self.db.publication_confirmed(item.item_id, str(message_id))
         return PublicationResult(True, str(message_id))
 

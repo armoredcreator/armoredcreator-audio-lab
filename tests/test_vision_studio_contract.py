@@ -11,6 +11,9 @@ from armored_core.storage import Storage
 
 
 class FakeAPI:
+    def affiliate_link_for_product(self, product):
+        return str(product["offerLink"])
+
     def get_exact_product(self, shop_id, item_id):
         assert shop_id == "123"
         assert item_id == "456"

@@ -1,0 +1,2 @@
+# Isolated V2 web-discovery experiment
+playwright>=1.45,<2

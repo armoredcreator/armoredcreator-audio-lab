@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -120,6 +121,72 @@ class LiveReconnectTests(unittest.TestCase):
                 )
             finally:
                 coordinator.close()
+
+    def test_run_forever_survives_transient_live_telegram_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "armoredcreator.db")
+            db.complete_historical_sync()
+            db.set_sync_topic_checkpoint(228, "topic", 99)
+
+            class Source:
+                class Reader:
+                    def __init__(self):
+                        self.connects = 0
+                        self.disconnects = 0
+                        self.connected = False
+
+                    def is_connected(self):
+                        return self.connected
+
+                    async def connect(self):
+                        self.connects += 1
+                        self.connected = True
+
+                    async def disconnect(self):
+                        self.disconnects += 1
+                        self.connected = False
+
+                def __init__(self):
+                    self.reader = self.Reader()
+                    self.calls = 0
+
+                async def fetch_live_candidate_async(self):
+                    await self.reader.connect()
+                    self.calls += 1
+                    if self.calls == 1:
+                        await self.reader.disconnect()
+                        raise ConnectionError("telegram-temporarily-offline")
+                    return None, {}
+
+                def commit_live_checkpoints(self, checkpoints):
+                    pass
+
+            source = Source()
+            coordinator = Coordinator(
+                db,
+                storage,
+                _Vision(),
+                _Studio(storage),
+                _Publisher(),
+                source,
+            )
+            previous = os.environ.get("ARMORED_LIVE_ERROR_BACKOFF")
+            os.environ["ARMORED_LIVE_ERROR_BACKOFF"] = "1"
+            try:
+                coordinator.run_forever(max_cycles=2, poll_seconds=0)
+            finally:
+                if previous is None:
+                    os.environ.pop("ARMORED_LIVE_ERROR_BACKOFF", None)
+                else:
+                    os.environ["ARMORED_LIVE_ERROR_BACKOFF"] = previous
+
+            self.assertEqual(source.calls, 2)
+            self.assertEqual(source.reader.connects, 2)
+            self.assertEqual(source.reader.disconnects, 1)
+            self.assertEqual(db.sync_topic_checkpoint(228), 99)
+            coordinator.close()
 
     def test_next_poll_can_materialize_the_next_candidate_after_previous_completion(self):
         with tempfile.TemporaryDirectory() as td:

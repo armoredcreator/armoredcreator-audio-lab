@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -66,21 +68,28 @@ def localizar_modelo(voz):
     return modelos[0], index
 
 
+def _backend_output_tail(stdout: str, stderr: str, limit: int = 12) -> str:
+    lines = [line.strip() for line in (stdout + "\n" + stderr).splitlines() if line.strip()]
+    return " | ".join(lines[-limit:])
+
+
 def converter_interno(entrada, saida, modelo, index, item_id=None):
-    from rvc_python.infer import RVCInference
     import scipy.io.wavfile as wavfile
 
-    prefix = f"[RVC][ITEM {item_id}] " if item_id else "[RVC] "
-    print(f"\n{prefix}Iniciando conversão de voz")
-    rvc = RVCInference(
-        model_path=str(modelo),
-        index_path=str(index) if index else "",
-        version="v2",
-        device="cpu:0",
-    )
-    print(f"{prefix}Modelo carregado; convertendo voz")
+    prefix = f"[STUDIO][ITEM {item_id}] " if item_id else "[STUDIO] "
+    print(f"{prefix}RVC voz={modelo.parent.name}")
 
+    captured_stdout = io.StringIO()
+    captured_stderr = io.StringIO()
     try:
+        with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
+            from rvc_python.infer import RVCInference
+            rvc = RVCInference(
+                model_path=str(modelo),
+                index_path=str(index) if index else "",
+                version="v2",
+                device="cpu:0",
+            )
         # rvc-python's infer_file() writes its result with scipy internally.
         # When vc_single() fails, the library returns a traceback string
         # instead of an audio array; infer_file() then raises the misleading
@@ -120,8 +129,11 @@ def converter_interno(entrada, saida, modelo, index, item_id=None):
             raise RuntimeError("RVC retornou áudio inválido")
 
         wavfile.write(str(saida), int(rvc.vc.tgt_sr), wav_opt)
-    except Exception:
+    except Exception as exc:
         Path(saida).unlink(missing_ok=True)
+        backend = _backend_output_tail(captured_stdout.getvalue(), captured_stderr.getvalue())
+        if backend:
+            raise RuntimeError(f"{exc} | backend: {backend}") from exc
         raise
 
     try:
@@ -129,7 +141,6 @@ def converter_interno(entrada, saida, modelo, index, item_id=None):
     except Exception:
         Path(saida).unlink(missing_ok=True)
         raise
-    print(f"{prefix}CONCLUÍDO output={saida}")
     return Path(saida)
 
 
@@ -137,9 +148,8 @@ def executar_no_rvc(entrada, saida, voz, item_id=None):
     modelo, index = localizar_modelo(voz)
     rvc_python = resolver_rvc_python()
 
-    prefix = f"[RVC][ITEM {item_id}]" if item_id else "[RVC]"
-    print(f"\n{prefix} VOICE | voz={voz}")
-    print(f"{prefix} modelo={modelo.name} index={index.name if index else '-'}")
+    prefix = f"[STUDIO][ITEM {item_id}]" if item_id else "[STUDIO]"
+    print(f"\n{prefix} RVC voz={voz}")
 
     current_python = Path(sys.executable).resolve()
     if current_python == rvc_python.resolve():
@@ -153,11 +163,21 @@ def executar_no_rvc(entrada, saida, voz, item_id=None):
         voz,
         str(item_id or ""),
     ]
-    print(f"{prefix} Executando ambiente RVC")
-
-    resultado = subprocess.run(comando, cwd=str(BASE_DIR))
+    resultado = subprocess.run(
+        comando,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if resultado.returncode != 0:
-        raise RuntimeError("Falha na conversão RVC.")
+        backend = _backend_output_tail(resultado.stdout or "", resultado.stderr or "")
+        reason = "Falha na conversão RVC."
+        if backend:
+            reason += f" | backend: {backend}"
+        raise RuntimeError(reason)
     validar_arquivo(saida, "Áudio RVC")
     return Path(saida)
 

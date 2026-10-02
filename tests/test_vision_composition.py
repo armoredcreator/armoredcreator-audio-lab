@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import unittest
-
 from ArmoredVision.service import ArmoredVision
 
 
@@ -25,119 +22,29 @@ class V1FakeAPI:
         self.exact_calls.append((shop_id, item_id))
         return PRODUCT.copy()
 
-    def generate_short_link(self, origin):
-        return "https://s.shopee.com.br/generated"
+    def affiliate_link_for_product(self, product):
+        return str(product["offerLink"])
 
 
-class FakeV2:
-    def discover(self, product, *, original_affiliate_url, original_url):
-        assert product["itemId"] == 123
-        return (
-            original_affiliate_url,
-            "https://s.shopee.com.br/c1",
-            "https://s.shopee.com.br/c2",
-        ), (
-            {"candidate_order": 0, "decision": "ORIGINAL"},
-            {"candidate_order": 1, "decision": "ACCEPTED"},
-        )
+def test_v1_resolves_product_without_ai_execution(monkeypatch):
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
 
-
-class FakeCaption:
-    def generate(self, product):
-        assert product["productName"] == "Produto Exemplo 1L"
-        return "Olha esse charme ✨\n#casa"
-
-
-def test_v1_contract_remains_usable_when_new_layers_are_disabled(monkeypatch):
-    monkeypatch.delenv("ARMORED_VISION_V2_ENABLED", raising=False)
-    monkeypatch.delenv("ARMORED_CAPTION_ENABLED", raising=False)
     api = V1FakeAPI()
     vision = ArmoredVision(api=api)
 
     result = vision.identify(
-        type("ItemStub", (), {
-            "original_url": "https://shopee.com.br/product/456/123",
-        })()
+        type(
+            "ItemStub",
+            (),
+            {"original_url": "https://shopee.com.br/product/456/123"},
+        )()
     )
 
     assert result.affiliate_name == "Produto Exemplo 1L"
     assert result.affiliate_url == "https://s.shopee.com.br/original"
     assert result.affiliate_urls == ("https://s.shopee.com.br/original",)
     assert result.publication_caption is None
+    assert result.ia_context["productName"] == "Produto Exemplo 1L"
+    assert result.ia_context["shopName"] == "Loja Exemplo"
     assert api.exact_calls == [("456", "123")]
-
-
-def test_v2_and_caption_are_composed_after_v1_without_changing_v1(monkeypatch):
-    monkeypatch.setenv("ARMORED_VISION_V2_ENABLED", "1")
-    monkeypatch.setenv("ARMORED_CAPTION_ENABLED", "1")
-    api = V1FakeAPI()
-    vision = ArmoredVision(
-        api=api,
-        candidate_discovery=FakeV2(),
-        caption_generator=FakeCaption(),
-    )
-
-    result = vision.identify(
-        type("ItemStub", (), {
-            "original_url": "https://shopee.com.br/product/456/123",
-        })()
-    )
-
-    assert result.affiliate_url == "https://s.shopee.com.br/original"
-    assert result.affiliate_urls == (
-        "https://s.shopee.com.br/original",
-        "https://s.shopee.com.br/c1",
-        "https://s.shopee.com.br/c2",
-    )
-    assert result.publication_caption == "Olha esse charme ✨\n#casa"
-    assert result.candidate_records[0]["decision"] == "ORIGINAL"
-    assert api.exact_calls == [("456", "123")]
-
-class FailingV2:
-    def discover(self, *args, **kwargs):
-        raise RuntimeError("shopee-api-temporarily-unavailable")
-
-
-class FailingCaption:
-    def generate(self, product):
-        raise RuntimeError("gemini-temporarily-unavailable")
-
-
-class VisionCompositionTests(unittest.TestCase):
-    def tearDown(self):
-        os.environ.pop("ARMORED_VISION_V2_ENABLED", None)
-        os.environ.pop("ARMORED_CAPTION_ENABLED", None)
-
-    def test_v2_runtime_failure_maps_to_waiting_vision(self):
-        os.environ["ARMORED_VISION_V2_ENABLED"] = "1"
-        vision = ArmoredVision(
-            api=V1FakeAPI(),
-            candidate_discovery=FailingV2(),
-        )
-
-        from armored_core.services import VisionUnresolvedError
-        with self.assertRaises(VisionUnresolvedError) as ctx:
-            vision.identify(type("ItemStub", (), {
-                "original_url": "https://shopee.com.br/product/456/123",
-            })())
-
-        self.assertIn("V2 indisponível", str(ctx.exception))
-
-    def test_caption_runtime_failure_maps_to_waiting_vision(self):
-        os.environ["ARMORED_CAPTION_ENABLED"] = "1"
-        vision = ArmoredVision(
-            api=V1FakeAPI(),
-            caption_generator=FailingCaption(),
-        )
-
-        from armored_core.services import VisionUnresolvedError
-        with self.assertRaises(VisionUnresolvedError) as ctx:
-            vision.identify(type("ItemStub", (), {
-                "original_url": "https://shopee.com.br/product/456/123",
-            })())
-
-        self.assertIn("Caption Generator indisponível", str(ctx.exception))
-
-
-if __name__ == "__main__":
-    unittest.main()

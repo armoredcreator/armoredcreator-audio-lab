@@ -61,6 +61,74 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(row.working_path is not None)
         self.assertTrue(row.result_path is not None)
 
+    def test_publish_once_receives_fresh_publication_without_preflight(self):
+        class IdempotentPublisher:
+            def __init__(self, db):
+                self.db = db
+                self.calls = 0
+
+            def publish_once(self, item):
+                self.calls += 1
+                if self.db.publication(item.item_id) is not None:
+                    raise AssertionError("Pipeline must not pre-create publication before publish_once")
+                return PublicationResult(True, "telegram-456")
+
+        pub = IdempotentPublisher(self.db)
+        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub)
+        p.run(self.item)
+
+        self.assertEqual(pub.calls, 1)
+        self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
+
+
+    def test_armored_ia_runs_between_vision_and_studio(self):
+        class IA:
+            def __init__(self):
+                self.calls = 0
+            def generate_caption(self, context):
+                self.calls += 1
+                assert context["productName"] == "produto-final"
+                return "Olha esse charme ✨\n#casa"
+
+        ia = IA()
+        import os
+        old_enabled = os.environ.get("ARMORED_IA_ENABLED")
+        old_caption = os.environ.get("ARMORED_IA_CAPTION_ENABLED")
+        os.environ["ARMORED_IA_ENABLED"] = "1"
+        os.environ["ARMORED_IA_CAPTION_ENABLED"] = "1"
+
+        class VisionWithContext:
+            def identify(self, item):
+                return VisionResult(
+                    "produto-final",
+                    "https://example.invalid/a",
+                    ia_context={"productName": "produto-final"},
+                )
+
+        try:
+            p = Pipeline(
+                self.db,
+                self.storage,
+                VisionWithContext(),
+                Studio(self.storage),
+                self.pub,
+                ia,
+            )
+            p.run(self.item)
+            row = self.db.get(self.item)
+            self.assertEqual(row.state, State.PUBLISHED)
+            self.assertEqual(row.publication_caption, "Olha esse charme ✨\n#casa")
+            self.assertEqual(ia.calls, 1)
+        finally:
+            if old_enabled is None:
+                os.environ.pop("ARMORED_IA_ENABLED", None)
+            else:
+                os.environ["ARMORED_IA_ENABLED"] = old_enabled
+            if old_caption is None:
+                os.environ.pop("ARMORED_IA_CAPTION_ENABLED", None)
+            else:
+                os.environ["ARMORED_IA_CAPTION_ENABLED"] = old_caption
+
     def test_telegram_timeout_enters_recovery_without_becoming_failed(self):
         class UnknownPublisher(Publisher):
             def publish(self, item):

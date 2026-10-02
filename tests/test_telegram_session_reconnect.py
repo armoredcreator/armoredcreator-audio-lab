@@ -63,8 +63,12 @@ def test_failed_telegram_start_closes_session_before_next_reconnect():
         except ConnectionError as exc:
             first_error = exc
         assert first_error is not None
-        assert pool == []
+        # The initial client was consumed by _reader(); the failed reconnect
+        # consumes the second client. The final client is created on the next
+        # explicit connect attempt.
+        assert pool == [created[2]]
         await reader.connect()
+        assert pool == []
 
     asyncio.run(scenario())
 

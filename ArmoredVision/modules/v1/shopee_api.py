@@ -49,6 +49,15 @@ class ShopeeAffiliateAPI:
         p=nodes[0]
         if str(p.get("shopId"))!=str(shop_id) or str(p.get("itemId"))!=str(item_id): raise ShopeeAPIError("Produto Shopee divergente")
         return p
+    def affiliate_link_for_product(self, product: dict[str, Any]):
+        offer = str(product.get("offerLink") or "").strip()
+        if offer:
+            return offer
+        product_link = str(product.get("productLink") or "").strip()
+        if not product_link:
+            raise ShopeeAPIError("Produto não possui productLink canônico para gerar afiliação")
+        return str(self.generate_short_link(product_link)["short_link"]).strip()
+
     def generate_short_link(self,origin_url:str):
         q=f"""mutation {{ generateShortLink(input: {{ originUrl: {json.dumps(origin_url)} }}) {{ shortLink }} }}"""
         link=(self._post(q).get("data",{}).get("generateShortLink") or {}).get("shortLink")

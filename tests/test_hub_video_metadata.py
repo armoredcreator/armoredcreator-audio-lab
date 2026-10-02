@@ -95,6 +95,9 @@ def test_publish_telegram_reconciles_timeout_without_republishing(monkeypatch, t
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
 
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
+
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
     item = _item(output)
@@ -104,6 +107,9 @@ def test_publish_telegram_reconciles_timeout_without_republishing(monkeypatch, t
     class DB:
         def publication_started(self, *args, **kwargs):
             calls["started"] += 1
+
+        def publication_send_started(self, *args, **kwargs):
+            calls["send_started"] = calls.get("send_started", 0) + 1
 
         def publication(self, content_id):
             return {
@@ -159,12 +165,16 @@ def test_publish_telegram_raises_publication_unknown_on_unresolved_timeout(monke
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
 
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
+
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
     item = _item(output)
 
     hub = ArmoredHub(tmp_path, db=types.SimpleNamespace(
         publication_started=lambda *args, **kwargs: None,
+        publication_send_started=lambda *args, **kwargs: None,
         publication=lambda _content_id: {"published_message_id": None, "confirmed": 0},
     ))
     hub._resolve_destination_chat_id = lambda topic_id: "-100123"
@@ -240,12 +250,16 @@ def test_publish_telegram_passes_real_video_metadata_to_send_video(monkeypatch, 
     monkeypatch.setitem(sys.modules, "telegram.error", fake_error)
     monkeypatch.setitem(sys.modules, "telegram.request", fake_request)
 
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
+
     output = tmp_path / "550_test.mp4"
     output.write_bytes(b"mp4")
     item = _item(output)
 
     hub = ArmoredHub(tmp_path, db=types.SimpleNamespace(
         publication_started=lambda *args, **kwargs: None,
+        publication_send_started=lambda *args, **kwargs: None,
         publication_message_sent=lambda *args, **kwargs: None,
         publication_confirmed=lambda *args, **kwargs: None,
     ))

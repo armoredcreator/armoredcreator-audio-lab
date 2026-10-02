@@ -1,11 +1,13 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from ArmoredHub.service import ArmoredHub
 from armored_core.database import Database
 from armored_core.models import PublicationCheck
+from armored_core.services import PublicationUnknownError
 from armored_core.storage import Storage
 
 
@@ -78,6 +80,137 @@ class HubContractTests(unittest.TestCase):
         finally:
             pass
 
+
+    def test_unscoped_exact_publication_can_survive_missing_topic_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                hub = ArmoredHub(root, db)
+
+                message = type(
+                    "Message",
+                    (),
+                    {
+                        "reply_to": None,
+                        "message": hub._publication_text(item),
+                        "video": object(),
+                        "document": None,
+                    },
+                )()
+
+                self.assertFalse(
+                    hub._telegram_publication_matches(
+                        message, item, 228, topic_scoped=False
+                    )
+                )
+                self.assertTrue(
+                    hub._telegram_publication_matches(
+                        message, item, 228,
+                        topic_scoped=False,
+                        allow_unknown_topic=True,
+                    )
+                    )
+            finally:
+                db.close()
+
+    def test_unscoped_candidate_is_reverified_by_message_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                db.publication_started(item.item_id)
+                hub = ArmoredHub(root, db)
+
+                calls = []
+                # Exercise the real candidate-reconciliation path. Discovery
+                # is replaced at the async boundary, while the candidate is
+                # still re-verified by its Telegram message ID.
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "TELEGRAM_API_ID": "12345",
+                        "TELEGRAM_API_HASH": "test-hash",
+                        "ARMORED_HUB_TOPIC_ID": "228",
+                    },
+                    clear=False,
+                ), patch.object(
+                    hub, "_resolve_destination_chat_id", return_value="-100123"
+                ):
+                    def run_sync_without_leaking(coroutine):
+                        coroutine.close()
+                        return ["474"]
+
+                    hub._run_async = run_sync_without_leaking
+                    hub._verify_telegram_message = (
+                        lambda message_id, current: calls.append(message_id) or True
+                    )
+
+                    candidates = hub._find_telegram_publications(item)
+
+                    self.assertEqual(candidates, ["474"])
+                    self.assertEqual(calls, ["474"])
+
+                    # check_publication consumes the already-verified candidate;
+                    # it must not perform a second Telegram verification.
+                    hub._find_telegram_publications = lambda current: ["474"]
+                    self.assertEqual(
+                        hub.check_publication(item),
+                        PublicationCheck.CONFIRMED,
+                    )
+                    self.assertEqual(calls, ["474"])
+                    self.assertEqual(
+                        db.publication(item.item_id)["published_message_id"],
+                        "474",
+                    )
+            finally:
+                db.close()
+
+    def test_sent_unverified_without_evidence_stays_unknown_and_never_republishes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            try:
+                item = self._item(db, storage)
+                db.publication_started(item.item_id)
+                db.publication_send_started(item.item_id)
+                hub = ArmoredHub(root, db)
+                hub._find_telegram_publications = lambda current: []
+
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "ARMORED_TELEGRAM_VERIFY_ATTEMPTS": "1",
+                        "ARMORED_TELEGRAM_VERIFY_RETRY_DELAY": "0",
+                    },
+                    clear=False,
+                ):
+                    self.assertEqual(
+                        hub.check_publication(item),
+                        PublicationCheck.UNKNOWN,
+                    )
+
+                    calls = {"publish": 0}
+
+                    def forbidden_publish(current):
+                        calls["publish"] += 1
+                        raise AssertionError("UNKNOWN publication must never be republished")
+
+                    hub.publish = forbidden_publish
+                    with self.assertRaises(PublicationUnknownError):
+                        hub.publish_once(item)
+
+                    self.assertEqual(calls["publish"], 0)
+                    row = db.publication(item.item_id)
+                    self.assertEqual(row["verification_status"], "SENT_UNVERIFIED")
+                    self.assertEqual(row["confirmed"], 0)
+            finally:
+                db.close()
 
     def test_publish_once_does_not_preflight_fresh_publication(self):
         with tempfile.TemporaryDirectory() as td:

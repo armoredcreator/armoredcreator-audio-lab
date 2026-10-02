@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 from armored_core.models import Item
 from armored_core.services import VisionResult, VisionUnresolvedError
 
 from .modules.v1.shopee_api import ShopeeAffiliateAPI, ShopeeProductNotFoundError
 from .modules.v1.shopee_resolver import resolve_short_url
-from .modules.v2.service import CandidateDiscovery, VisionCandidateError
-from .modules.caption.generator import CaptionGenerator, CaptionGenerationError
 
 
 class ArmoredVision:
@@ -19,10 +14,22 @@ class ArmoredVision:
     armored_core and no JSON state from the legacy Vision is used.
     """
 
-    def __init__(self, api=None, candidate_discovery=None, caption_generator=None):
+    def __init__(self, api=None):
         self.api = api
-        self.candidate_discovery = candidate_discovery
-        self.caption_generator = caption_generator
+
+    @staticmethod
+    def _ia_context(product: dict) -> dict:
+        keys = (
+            "productName", "itemId", "shopId", "shopName", "productCatIds",
+            "priceMin", "priceMax", "sales", "ratingStar", "brand",
+            "brandName", "model", "modelName", "description", "attributes",
+            "technicalCharacteristics", "imageUrl",
+        )
+        return {
+            key: product[key]
+            for key in keys
+            if key in product and product[key] not in (None, "", [], {})
+        }
 
     def identify(self, item: Item) -> VisionResult:
         original = (item.original_url or "").strip()
@@ -35,14 +42,15 @@ class ArmoredVision:
             product = api.get_exact_product(resolved.shop_id, resolved.item_id)
         except ShopeeProductNotFoundError as exc:
             raise VisionUnresolvedError(
-                f"Vision V1 não resolveu o produto Shopee {resolved.shop_id}:{resolved.item_id}; "
-                "item preservado para futura reconciliação Vision V2"
+                f"Vision V1 não resolveu o produto Shopee "
+                f"{resolved.shop_id}:{resolved.item_id}; "
+                "item preservado para futura recuperação"
             ) from exc
 
-        affiliate_url = str(product.get("offerLink") or "").strip()
-        if not affiliate_url:
-            generated = api.generate_short_link(original)
-            affiliate_url = str(generated["short_link"]).strip()
+        # The incoming URL is identification input only. The final affiliate
+        # link must come from the exact V1-resolved product, never from a
+        # third-party affiliate short URL supplied by the source message.
+        affiliate_url = str(api.affiliate_link_for_product(product)).strip()
 
         identifier = str(
             product.get("productName")
@@ -50,41 +58,12 @@ class ArmoredVision:
             or f"{resolved.shop_id}_{resolved.item_id}"
         )
 
-        affiliate_urls = (affiliate_url,)
-        candidate_records: tuple[dict, ...] = ()
-        if os.getenv("ARMORED_VISION_V2_ENABLED", "0") == "1":
-            try:
-                discovery = self.candidate_discovery or CandidateDiscovery()
-                affiliate_urls, candidate_records = discovery.discover(
-                    product,
-                    original_affiliate_url=affiliate_url,
-                    original_url=original,
-                )
-            except VisionCandidateError as exc:
-                raise VisionUnresolvedError(str(exc)) from exc
-            except Exception as exc:
-                raise VisionUnresolvedError(
-                    f"Vision V2 indisponível: {type(exc).__name__}: {exc}"
-                ) from exc
-
-        publication_caption = None
-        if os.getenv("ARMORED_CAPTION_ENABLED", "0") == "1":
-            try:
-                generator = self.caption_generator or CaptionGenerator()
-                publication_caption = generator.generate(product)
-            except CaptionGenerationError as exc:
-                raise VisionUnresolvedError(str(exc)) from exc
-            except Exception as exc:
-                raise VisionUnresolvedError(
-                    f"Caption Generator indisponível: {type(exc).__name__}: {exc}"
-                ) from exc
-
         return VisionResult(
             identifier,
             affiliate_url,
-            affiliate_urls=tuple(affiliate_urls),
-            publication_caption=publication_caption,
-            candidate_records=tuple(candidate_records),
+            affiliate_urls=(affiliate_url,),
+            publication_caption=None,
+            ia_context=self._ia_context(product),
         )
 
 

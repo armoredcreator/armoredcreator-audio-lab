@@ -121,6 +121,88 @@ class VisionWaitingTests(unittest.TestCase):
             finally:
                 restarted_db.close()
 
+    def test_coordinator_startup_does_not_auto_retry_waiting_vision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            item_id = self._item(db, storage, "vision-waiting-startup-1")
+            vision = _UnresolvedVision()
+            studio = _Studio()
+            publisher = _Publisher()
+            Pipeline(db, storage, vision, studio, publisher).run(item_id)
+
+            from armored_core.coordinator import Coordinator
+            coordinator = Coordinator(
+                db, storage, vision, studio, publisher, source=None
+            )
+            try:
+                recovered = coordinator.recover_pending()
+                self.assertEqual(recovered, [])
+                self.assertEqual(db.get(item_id).state, State.WAITING_VISION)
+                self.assertTrue(db.get(item_id).original_path.is_file())
+            finally:
+                db.close()
+
+    def test_ia_caption_exhaustion_goes_to_recovery_without_waiting_vision(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            item_id = self._item(db, storage, "caption-exhausted-1")
+
+            class _ResolvedVision:
+                def identify(self, item):
+                    return type(
+                        "VisionResultStub",
+                        (),
+                        {
+                            "affiliate_name": "Bancada Suspensa",
+                            "affiliate_url": "https://affiliate.invalid/456",
+                            "affiliate_urls": ("https://affiliate.invalid/456",),
+                            "publication_caption": None,
+                            "ia_context": {"productName": "Bancada Suspensa"},
+                        },
+                    )()
+
+            class _CaptionExhausted:
+                def generate_caption(self, context):
+                    from ArmoredIA.caption.generator import CaptionGenerationError
+                    raise CaptionGenerationError(
+                        "Nenhuma das 10 candidata(s) passou pela Policy"
+                    )
+
+            publisher = _Publisher()
+            studio = _Studio()
+            try:
+                from unittest.mock import patch
+                with patch.dict(
+                    "os.environ",
+                    {"ARMORED_IA_ENABLED": "1", "ARMORED_IA_CAPTION_ENABLED": "1"},
+                    clear=False,
+                ):
+                    with self.assertRaisesRegex(
+                        Exception, "Nenhuma das 10 candidata"
+                    ):
+                        Pipeline(
+                            db,
+                            storage,
+                            _ResolvedVision(),
+                            studio,
+                            publisher,
+                            _CaptionExhausted(),
+                        ).run(item_id)
+
+                self.assertEqual(db.get(item_id).state, State.RECOVERY)
+                event = db.last_state_event(item_id)
+                self.assertEqual(event["new_state"], State.RECOVERY.value)
+                self.assertIn("CaptionGenerationError", event["reason"])
+                self.assertEqual(studio.calls, 0)
+                self.assertEqual(publisher.calls, 0)
+                self.assertTrue(db.get(item_id).original_path.is_file())
+            finally:
+                db.close()
+
     def test_armored_vision_maps_exact_not_found_to_unresolved(self):
         item = type("ItemStub", (), {
             "original_url": "https://shopee.com.br/a-i.123.456",

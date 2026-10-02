@@ -4,7 +4,7 @@ import inspect
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 from .database import Database
 from .models import Item, PublicationCheck
 
@@ -29,7 +29,7 @@ class VisionResult:
     affiliate_url: str
     affiliate_urls: tuple[str, ...] = ()
     publication_caption: str | None = None
-    candidate_records: tuple[dict, ...] = ()
+    ia_context: dict[str, Any] | None = None
 
 @dataclass(frozen=True)
 class StudioResult:
@@ -46,6 +46,9 @@ class VisionService(Protocol):
 
 class StudioService(Protocol):
     def process(self, item: Item) -> StudioResult: ...
+
+class AIService(Protocol):
+    def generate_caption(self, context: dict[str, Any]) -> str: ...
 
 class Publisher(Protocol):
     def check_publication(self, item: Item) -> PublicationCheck: ...

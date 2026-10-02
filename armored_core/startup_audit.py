@@ -58,6 +58,23 @@ class StartupReconciler:
                 publication_check = None
 
             current = self.db.get(item_id)
+
+            # Older releases incorrectly classified Caption failures as
+            # WAITING_VISION. Migrate only unmistakable historical Caption
+            # evidence to RECOVERY so WAITING_VISION remains Vision-only.
+            legacy_error = str(self.db.last_error(item_id) or "")
+            legacy_caption = (
+                "Nenhuma das " in legacy_error
+                and "passou pela Policy" in legacy_error
+            ) or "Gemini não conseguiu gerar uma legenda válida" in legacy_error
+            if current.state == State.WAITING_VISION and legacy_caption:
+                self.db.transition(
+                    item_id,
+                    State.RECOVERY,
+                    "legacy-caption-waiting-vision-migrated-to-recovery",
+                )
+                current = self.db.get(item_id)
+
             if (
                 current.state == State.FAILED
                 and publication is not None
@@ -94,7 +111,7 @@ class StartupReconciler:
             else:
                 summary["pending"] += 1
 
-            self.log.info(
+            self.log.debug(
                 "[STARTUP][ITEM] id=%s state=%s publication=%s cleanup=%s files=%s",
                 item_id, state, pub_state,
                 "OK" if row["cleanup_completed"] else "PENDENTE",
@@ -139,12 +156,12 @@ class StartupReconciler:
             message_id = publication["published_message_id"] if publication else None
             if message_id:
                 self.db.publication_confirmed(item_id, str(message_id))
-                self.log.info(
+                self.log.debug(
                     "[STARTUP][PUBLICATION] id=%s CONFIRMED message_id=%s",
                     item_id, message_id,
                 )
         elif value == "ABSENT":
-            self.log.info("[STARTUP][PUBLICATION] id=%s ABSENT", item_id)
+            self.log.debug("[STARTUP][PUBLICATION] id=%s ABSENT", item_id)
         else:
             self.log.warning("[STARTUP][PUBLICATION] id=%s UNKNOWN", item_id)
         return value

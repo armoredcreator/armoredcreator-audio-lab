@@ -7,6 +7,7 @@ class State(StrEnum):
     RECEIVED = "RECEIVED"
     VISION = "VISION"
     WAITING_VISION = "WAITING_VISION"
+    IA = "IA"
     STUDIO = "STUDIO"
     PUBLISHING = "PUBLISHING"
     PUBLISHED = "PUBLISHED"
@@ -39,6 +40,7 @@ class Item:
     cleanup_completed: bool = False
     publication_caption: str | None = None
     affiliate_urls: tuple[str, ...] = ()
+    ia_context: dict | None = None
 
     @property
     def item_id(self) -> str:

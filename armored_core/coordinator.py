@@ -20,12 +20,12 @@ from .storage import Storage
 class Coordinator:
     """Single composition root for the isolated ArmoredCreator pipeline."""
 
-    def __init__(self, db, storage, vision, studio, publisher, source=None):
+    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
         self.db = db
         self.storage = storage
         self.sync = SyncService(db, storage)
-        self.pipeline = Pipeline(db, storage, vision, studio, publisher)
-        self.recovery = Recovery(db, storage, vision, studio, publisher)
+        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
+        self.recovery = Recovery(db, storage, vision, studio, publisher, ia)
         self.startup_reconciler = StartupReconciler(db, storage, publisher)
         self.source = source
         self._runtime_lock_held = False
@@ -36,23 +36,30 @@ class Coordinator:
     @classmethod
     def build(cls, root: Path | None = None, bindings: Any | None = None):
         storage = Storage(root)
-        for credential_file in (
-            storage.root / "credentials" / "telegram" / "user.env",
-            storage.root / "credentials" / "telegram" / "bot.env",
-            storage.root / "credentials" / "shopee" / "affiliate.env",
-            storage.root / ".env",
-        ):
-            if credential_file.exists():
-                load_dotenv(credential_file, override=False)
+        # Project-local credential source of truth.
+        # Secrets live only in credentials/project.env; runtime modules continue
+        # consuming them through os.getenv() and do not know the file location.
+        project_credentials = storage.root / "credentials" / "project.env"
+        if project_credentials.exists():
+            load_dotenv(project_credentials, override=True)
+
+        # .env contains project configuration, not secrets. Keep externally
+        # supplied configuration compatible while preventing it from replacing
+        # the project credential source above.
+        project_config = storage.root / ".env"
+        if project_config.exists():
+            load_dotenv(project_config, override=False)
 
         db = Database(storage.database / "armoredcreator.db")
         if bindings is None:
             from ArmoredHub.service import ArmoredHub
             from ArmoredStudio.service import ArmoredStudio
             from ArmoredVision.service import ArmoredVision
+            from ArmoredIA.service import ArmoredIA
             from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource
 
             vision = ArmoredVision()
+            ia = ArmoredIA()
             studio = ArmoredStudio(storage.root)
             publisher = ArmoredHub(storage.root, db)
             if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
@@ -64,8 +71,8 @@ class Coordinator:
                 source = TelegramSource(storage.root, reader, db)
             else:
                 source = LocalSource(storage.root / "input")
-            return cls(db, storage, vision, studio, publisher, source)
-        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source)
+            return cls(db, storage, vision, studio, publisher, source, ia)
+        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source, getattr(bindings, "ia", None))
 
     async def _ensure_source_connection(self) -> None:
         """Reconnect a real Telegram source before materializing the next item."""
@@ -206,6 +213,14 @@ class Coordinator:
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
                     marker(item_id)
+
+                # A previously completed item may be rediscovered after an
+                # earlier candidate was recovered. Its checkpoint is safe to
+                # advance now because this item is durably PUBLISHED+cleanup.
+                topic_id = getattr(message, "topic_id", None)
+                commit = getattr(source, "commit_live_checkpoints", None)
+                if topic_id is not None and commit is not None:
+                    commit({int(topic_id): int(item_id)})
                 continue
 
             materialized = False
@@ -256,27 +271,24 @@ class Coordinator:
                     self.run(item_id)
                     current = self.db.get(item_id)
 
-                    # RECOVERY is an active unresolved state. Never allow
-                    # CATCH-UP to advance to another Telegram candidate while
-                    # publication reality is still ambiguous. Reconcile the
-                    # current item immediately; if Telegram remains UNKNOWN,
-                    # stop this run and require deterministic recovery/restart.
+                    # RECOVERY is a technical/incomplete-processing state:
+                    # it keeps the historical checkpoint blocked until the item
+                    # is resolved. WAITING_VISION is different: Vision has
+                    # durably classified the candidate but found no Shopee
+                    # destination. It is retained in SQLite and does not block
+                    # historical progress or LIVE.
                     if current.state == State.RECOVERY:
-                        try:
-                            self.recover(item_id)
-                        except Exception as recovery_exc:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                "[COORDINATOR][CATCH-UP] Item %s permanece em RECOVERY; "
-                                "não avançará para o próximo candidato: %s",
-                                item_id,
-                                recovery_exc,
-                            )
-                        current = self.db.get(item_id)
-                        if current.state == State.RECOVERY:
-                            processed.append(item_id)
-                            self._last_catch_up_completed_count = completed_count
-                            return processed
+                        checkpoint_blocked = True
+                        processed.append(item_id)
+                        continue
+
+                    if current.state == State.WAITING_VISION:
+                        topic_id = getattr(message, "topic_id", None)
+                        commit = getattr(source, "commit_live_checkpoints", None)
+                        if topic_id is not None and commit is not None and not checkpoint_blocked:
+                            commit({int(topic_id): int(message.telegram_message_id)})
+                        processed.append(item_id)
+                        continue
 
                     if (
                         current.state == State.PUBLISHED
@@ -285,9 +297,9 @@ class Coordinator:
                     ):
                         # Checkpoints are monotonic and must never jump past
                         # an earlier candidate whose materialization or
-                        # processing failed. The successful item may finish,
-                        # but its checkpoint remains uncommitted until the
-                        # blocked predecessor is recoverable.
+                        # processing failed. WAITING_VISION is not such a
+                        # blocker: it is a durable "no destination for now"
+                        # classification and may advance its topic checkpoint.
                         topic_id = getattr(message, "topic_id", None)
                         commit = getattr(source, "commit_live_checkpoints", None)
                         if topic_id is not None and commit is not None:
@@ -301,6 +313,20 @@ class Coordinator:
                     item_id,
                     exc,
                 )
+
+                # Pipeline.run() persists recoverable failures as RECOVERY and
+                # then re-raises. Keep the failed candidate durable, but continue
+                # the historical scan. Its checkpoint remains blocked until a
+                # later recovery pass resolves the technical failure.
+                current = self.db.get(item_id)
+                if current.state == State.RECOVERY:
+                    # Technical pipeline failures are durable RECOVERY items,
+                    # but they must not abort the historical scan. The current
+                    # checkpoint remains blocked; later candidates may be
+                    # processed one at a time. A later recovery pass revisits
+                    # this item before LIVE is allowed.
+                    processed.append(item_id)
+                    continue
 
             # Count only a fully published and cleaned item.
             current = self.db.get(item_id)
@@ -327,10 +353,10 @@ class Coordinator:
     def run_catch_up(self) -> list[str]:
         import asyncio
         processed = asyncio.run(self.run_catch_up_async())
-        # Never force LIVE here. The async runner is the authority: a
-        # materialization failure deliberately leaves historical sync open so
-        # the failed candidate remains recoverable and the next restart can
-        # resume from the persisted checkpoint.
+        # Never force LIVE here. The async runner is the authority: unresolved
+        # technical failures leave historical sync open while later candidates
+        # may still be processed; recovery remains responsible for the blocked
+        # checkpoint before LIVE.
         return processed
 
     async def _fetch_live_candidate_with_watchdog(self, fetch_candidate):
@@ -387,6 +413,9 @@ class Coordinator:
                 checkpoints = dict(checkpoints) if messages else {}
 
         if not messages:
+            commit = getattr(source, "commit_live_checkpoints", None)
+            if commit is not None and checkpoints:
+                commit(checkpoints)
             return []
 
         message = messages[0]
@@ -462,6 +491,125 @@ class Coordinator:
         import asyncio
         return asyncio.run(self.run_live_once_async())
 
+    @staticmethod
+    def _is_transient_source_error(exc: BaseException) -> bool:
+        """Return whether an origin failure is safe to retry inside CATCH-UP."""
+        return isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError))
+
+    async def _run_catch_up_with_recovery_async(self) -> None:
+        """Run historical processing, then retry technical RECOVERY items.
+
+        A technical failure must not starve the rest of CATCH-UP. Its checkpoint
+        remains blocked, so after the historical scan we reconcile RECOVERY
+        items and, when progress is made, rescan from the durable checkpoint.
+        WAITING_VISION is intentionally not auto-retried here.
+
+        Real Telegram connection failures can also happen while the historical
+        iterator is being advanced after a materialization failure. In that
+        case the iterator is no longer safe to resume. Release the source,
+        rebuild its historical iterator from the durable checkpoint, and retry
+        with bounded backoff so the Coordinator process remains alive.
+        """
+        rediscovery_attempted: set[str] = set()
+        source_error_backoff = max(
+            1.0,
+            float(os.getenv("ARMORED_SYNC_ERROR_BACKOFF", "5")),
+        )
+        while True:
+            try:
+                await self.run_catch_up_async()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not self._is_transient_source_error(exc) or not hasattr(
+                    self.source, "reader"
+                ):
+                    raise
+                import logging
+                logging.getLogger(__name__).exception(
+                    "[COORDINATOR][CATCH-UP] Telegram/rede de origem indisponível; "
+                    "Coordinator permanece vivo e tentará reconectar: %s",
+                    exc,
+                )
+                try:
+                    await self._release_source_connection()
+                except Exception as release_exc:
+                    logging.getLogger(__name__).warning(
+                        "[COORDINATOR][CATCH-UP] Falha ao liberar sessão após "
+                        "erro de origem: %s",
+                        release_exc,
+                    )
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    raise
+                reset()
+                await asyncio.sleep(source_error_backoff)
+                continue
+            if self.db.historical_complete():
+                return
+
+            before = set()
+            for row in self.db.conn.execute(
+                "SELECT content_id, state FROM items "
+                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value),
+            ).fetchall():
+                item = self.db.get(str(row["content_id"]))
+                if (
+                    item.state == State.RECOVERY
+                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                ):
+                    before.add(str(row["content_id"]))
+            if not before:
+                return
+
+            self.recover_pending()
+
+            after = set()
+            for row in self.db.conn.execute(
+                "SELECT content_id, state FROM items "
+                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value),
+            ).fetchall():
+                item = self.db.get(str(row["content_id"]))
+                if (
+                    item.state == State.RECOVERY
+                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                ):
+                    after.add(str(row["content_id"]))
+
+            # When Recovery makes progress, the Sync iterator must be rebuilt
+            # from the durable checkpoint. The real Telegram source otherwise
+            # remains exhausted and its in-memory _seen set would hide the
+            # already-scanned candidate on the same process lifetime.
+            if not before.issubset(after):
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    return
+                reset()
+                continue
+
+            # A materialization failure leaves a RECEIVED reservation with
+            # no immutable original. Give each such candidate exactly one
+            # same-process rediscovery attempt before stopping.
+            received_missing = {
+                item_id
+                for item_id in before
+                if self.db.get(item_id).state == State.RECEIVED
+                and not self.db.get(item_id).original_path.is_file()
+            }
+            pending_rediscovery = received_missing - rediscovery_attempted
+            if pending_rediscovery:
+                rediscovery_attempted.update(pending_rediscovery)
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    return
+                reset()
+                continue
+
+            # No Recovery/rediscovery progress: stop instead of tight-looping.
+            return
+
     async def _run_forever_async(
         self,
         poll_seconds: float = 2.0,
@@ -487,37 +635,49 @@ class Coordinator:
         ):
             if self.db.historical_complete() and not self.db.has_sync_checkpoints():
                 self.db.set_sync_mode("CATCH_UP")
-            catch_up_processed = await self.run_catch_up_async()
+            await self._run_catch_up_with_recovery_async()
 
             # A bounded CATCH-UP run remains opt-in certification behavior.
             # By default it terminates here, preserving the existing contract.
-            # A second explicit certification flag may instead perform a safe
-            # history-to-LIVE cutover after the requested number of completed
-            # items.
             bounded_limit = getattr(self.source, "_historical_limit", None)
-            if (
+            cert_then_live = (
+                os.getenv("ARMORED_CERT_CATCHUP_THEN_LIVE", "0").strip() == "1"
+            )
+            bounded_completed = (
                 bounded_limit is not None
                 and self._last_catch_up_completed_count >= int(bounded_limit)
-            ):
-                cert_then_live = (
-                    os.getenv("ARMORED_CERT_CATCHUP_THEN_LIVE", "0").strip() == "1"
-                )
-                if not cert_then_live:
-                    return
+            )
 
-                cutover = getattr(self.source, "prepare_live_cutover_async", None)
-                if cutover is None:
-                    raise RuntimeError(
-                        "ARMORED_CERT_CATCHUP_THEN_LIVE=1 exige que a fonte "
-                        "implemente prepare_live_cutover_async()"
+            # An unresolved historical candidate blocks the checkpoint and must
+            # never fall through into LIVE. The only exception is the explicit
+            # bounded certification flow, which first performs the source's
+            # durable history-to-LIVE cutover.
+            if not self.db.historical_complete():
+                if bounded_completed and cert_then_live:
+                    cutover = getattr(self.source, "prepare_live_cutover_async", None)
+                    if cutover is None:
+                        raise RuntimeError(
+                            "ARMORED_CERT_CATCHUP_THEN_LIVE=1 exige que a fonte "
+                            "implemente prepare_live_cutover_async()"
+                        )
+                    import logging
+                    await cutover()
+                    logging.getLogger(__name__).info(
+                        "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
+                        "cutover histórico seguro executado; entrando em LIVE"
                     )
 
-                import logging
-                await cutover()
-                logging.getLogger(__name__).info(
-                    "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
-                    "cutover histórico seguro executado; entrando em LIVE"
-                )
+                if not self.db.historical_complete():
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
+                        "LIVE bloqueado. O processo permanecerá encerrado até a "
+                        "reconciliação/reexecução do candidato pendente."
+                    )
+                    return
+
+            if bounded_completed and not cert_then_live:
+                return
 
         import logging
         logging.getLogger(__name__).info(
@@ -608,16 +768,28 @@ class Coordinator:
 
     def recover_pending(self):
         states = (
-            State.RECEIVED.value, State.VISION.value, State.STUDIO.value,
-            State.PUBLISHING.value, State.RECOVERY.value,
+            State.RECEIVED.value, State.VISION.value, State.IA.value,
+            State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
+            State.FAILED.value, State.PUBLISHED.value,
         )
         placeholders = ",".join("?" for _ in states)
         rows = self.db.conn.execute(
-            f"SELECT content_id, state FROM items WHERE state IN ({placeholders}) ORDER BY created_at, content_id", states
+            f"SELECT content_id, state FROM items WHERE state IN ({placeholders}) "
+            "OR (state=? AND cleanup_completed=0) ORDER BY created_at, content_id",
+            (*states, State.PUBLISHED.value),
         ).fetchall()
         recovered = []
         for row in rows:
             item_id = str(row["content_id"])
+
+            # FAILED is a legacy terminal state from the previous
+            # generic-exception path. Current processing failures are persisted
+            # as RECOVERY; legacy FAILED rows must therefore be reopened once
+            # through the same deterministic recovery path instead of being
+            # silently abandoned. Recovery itself decides the correct resume
+            # stage from durable state/artifacts.
+            if str(row["state"]) == State.FAILED.value:
+                self.db.transition(item_id, State.RECOVERY, "legacy-failed-recovery")
             # RECEIVED without an immutable original is a durable Telegram
             # reservation whose download was interrupted. The Sync source must
             # rediscover/materialize it; Recovery cannot invent the missing
@@ -645,15 +817,31 @@ class Coordinator:
                     continue
             try:
                 self.recover(item_id)
+                current = self.db.get(item_id)
                 recovered.append(item_id)
+                if (
+                    current.state in (State.WAITING_VISION, State.RECOVERY)
+                    or (current.state == State.PUBLISHED and not current.cleanup_completed)
+                ):
+                    # Startup recovery is ordered. An unresolved current item,
+                    # including PUBLISHED with cleanup still pending, blocks
+                    # progression because its durable lifecycle is incomplete.
+                    break
             except Exception as exc:
-                # A single unrecoverable item must not terminate the Coordinator.
-                # Pipeline failures are persisted in SQLite; startup continues
-                # with the remaining pending items and LIVE discovery.
                 import logging
+                current = self.db.get(item_id)
                 logging.getLogger(__name__).exception(
-                    "Recovery falhou para item %s; Coordinator continuará: %s",
+                    "Recovery falhou para item %s; state=%s: %s",
                     item_id,
+                    current.state.value,
                     exc,
                 )
+                if (
+                    current.state in (State.WAITING_VISION, State.RECOVERY)
+                    or (current.state == State.PUBLISHED and not current.cleanup_completed)
+                ):
+                    # The current candidate still owns the checkpoint. Never
+                    # continue startup recovery with a later item while this
+                    # candidate remains unresolved or cleanup-pending.
+                    break
         return recovered

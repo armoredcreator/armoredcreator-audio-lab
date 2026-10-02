@@ -40,7 +40,8 @@ class _Db:
         self.completed = True
 
 
-def test_certification_cutover_advances_each_topic_to_current_high_water_mark(tmp_path):
+def test_certification_cutover_advances_each_topic_to_current_high_water_mark(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SYNC_SOURCE", "Teste")
     reader = _Reader()
     db = _Db()
     source = TelegramSource(tmp_path, reader, db)
