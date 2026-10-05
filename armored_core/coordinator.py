@@ -251,7 +251,7 @@ class Coordinator:
                 continue
 
             materialized = False
-            current = self.db.get(item_id)
+            current = None
             try:
                 item_id, materialized, current = await self._vision_gate_and_materialize_async(message)
                 marker = getattr(source, "mark_ingested", None)
