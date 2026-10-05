@@ -22,7 +22,7 @@ class Pipeline:
         """Attach the Coordinator shutdown signal without coupling layers."""
         self._shutdown_checker = checker
 
-    def run(self, item_id: str) -> None:
+    def run(self, item_id: str, *, stop_after_vision: bool = False) -> None:
         item = self.db.get(item_id)
         self.trace.emit(item_id, "PIPELINE", "START", state=item.state.value, attempt=item.attempts + 1)
         self.log.info("[PIPELINE][ITEM %s] início state=%s", item.content_id, item.state.value)
@@ -33,7 +33,10 @@ class Pipeline:
             return
         try:
             self.db.record_attempt(item_id)
-            if not item.original_path.is_file():
+            # Vision V1 validates the Shopee product from the URL alone.
+            # The immutable media is therefore required only after Vision has
+            # accepted the candidate. This is the key bandwidth-saving gate.
+            if item.state not in (State.RECEIVED, State.VISION) and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
                 self.db.transition(item_id, State.VISION, "pipeline-start")
@@ -92,6 +95,11 @@ class Pipeline:
                         caption=bool(getattr(v, "publication_caption", None)),
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
+                if stop_after_vision:
+                    # Coordinator materializes the source only after this durable
+                    # Vision result. State remains IA/STUDIO so a second Pipeline
+                    # pass resumes without querying Shopee again.
+                    return
                 if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
                     self.db.transition(item_id, State.IA, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
