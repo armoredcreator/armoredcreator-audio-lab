@@ -36,7 +36,7 @@ class Pipeline:
             # Vision V1 validates the Shopee product from the URL alone.
             # The immutable media is therefore required only after Vision has
             # accepted the candidate. This is the key bandwidth-saving gate.
-            if item.state not in (State.RECEIVED, State.VISION) and not item.original_path.is_file():
+            if not stop_after_vision and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
                 self.db.transition(item_id, State.VISION, "pipeline-start")
