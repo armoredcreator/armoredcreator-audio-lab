@@ -251,29 +251,12 @@ class Coordinator:
                 continue
 
             materialized = False
+            current = self.db.get(item_id)
             try:
-                await self._ensure_source_connection()
-                item_id = str(await self.sync.ingest_message_async(IngestMessage(
-                    telegram_message_id=item_id,
-                    source_id=getattr(message, "source_id", "telegram"),
-                    topic_id=getattr(message, "topic_id", None),
-                    topic_name=getattr(message, "topic_name", None),
-                    original_url=getattr(message, "original_url", None),
-                    source_path=getattr(message, "source_path", None),
-                    materialize=getattr(message, "materialize", None),
-                )))
-                materialized = True
+                item_id, materialized, current = await self._vision_gate_and_materialize_async(message)
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
                     marker(str(message.telegram_message_id))
-                # Do not count here. A candidate is counted only after
-                # the complete pipeline reaches PUBLISHED and cleanup succeeds.
-                # This keeps the bounded CATCH-UP limit tied to completed items.
-                # Checkpoint advancement is deliberately deferred until the
-                # entire item has been processed, published, confirmed and cleaned.
-                # A materialized-but-unprocessed item must remain discoverable after
-                # a crash/restart; SQLite + the canonical workspace provide recovery.
-                pass
             except Exception as exc:
                 checkpoint_blocked = True
                 marker = getattr(source, "mark_materialization_failed", None)
@@ -281,15 +264,17 @@ class Coordinator:
                     marker()
                 import logging
                 logging.getLogger(__name__).exception(
-                    "[COORDINATOR][CATCH-UP] Falha ao materializar %s; "
-                    "checkpoint não avança e o próximo candidato poderá continuar: %s",
-                    getattr(message, "telegram_message_id", "?"),
-                    exc,
+                    "[COORDINATOR][CATCH-UP] Vision/materialization failed for %s; checkpoint blocked: %s",
+                    getattr(message, "telegram_message_id", "?"), exc,
                 )
-            finally:
-                await self._release_source_connection()
 
             if not materialized:
+                if current.state == State.WAITING_VISION:
+                    topic_id = getattr(message, "topic_id", None)
+                    commit = getattr(source, "commit_live_checkpoints", None)
+                    if topic_id is not None and commit is not None and not checkpoint_blocked:
+                        commit({int(topic_id): int(message.telegram_message_id)})
+                    processed.append(item_id)
                 continue
 
             # Exactly one item crosses the Sync -> Pipeline boundary.
