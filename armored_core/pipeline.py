@@ -95,18 +95,17 @@ class Pipeline:
                         caption=bool(getattr(v, "publication_caption", None)),
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
-                if stop_after_vision:
-                    # Coordinator materializes the source only after this durable
-                    # Vision result. State remains IA/STUDIO so a second Pipeline
-                    # pass resumes without querying Shopee again.
-                    return
                 if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
                     self.db.transition(item_id, State.IA, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
                 else:
                     self.db.transition(item_id, State.STUDIO, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
-
+                if stop_after_vision:
+                    # Vision has been durably persisted and the next state is
+                    # already selected. The Coordinator may now materialize the
+                    # media and resume without querying Shopee a second time.
+                    return
             item = self.db.get(item_id)
             if item.state == State.IA:
                 self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)
