@@ -174,15 +174,20 @@ class Coordinator:
         )
         item_id = str(self.sync.reserve_message(ingest))
         try:
-            # Vision V1 is URL-only, so keep Sync connected while it validates
-            # the candidate. We only release the source after the single
-            # accepted candidate has been materialized.
+            # Match the original Coordinator lifecycle: Sync owns the source
+            # connection while the single candidate is reserved and materialized.
+            # Vision itself is URL-only, so no media is downloaded here.
+            await self._ensure_source_connection()
             if self.db.get(item_id).state != State.FAILED:
                 self.pipeline.run(item_id, stop_after_vision=True)
             current = self.db.get(item_id)
             if current.state == State.WAITING_VISION:
                 return item_id, False, current
-            if current.state not in (State.IA, State.STUDIO):
+            # stop_after_vision deliberately leaves the durable state at
+            # RECEIVED/VISION; affiliate_url is the durable proof that Vision
+            # accepted the candidate. The normal pipeline run resumes from
+            # that proof after materialization.
+            if not current.affiliate_url:
                 return item_id, False, current
             await self.sync.materialize_message_async(ingest)
             return item_id, True, self.db.get(item_id)
@@ -440,7 +445,7 @@ class Coordinator:
             return []
 
         message = messages[0]
-        item_id = None
+        item_id = str(message.telegram_message_id)
         materialized = False
         current = None
         try:
