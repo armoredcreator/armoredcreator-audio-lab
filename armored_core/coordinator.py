@@ -618,6 +618,27 @@ class Coordinator:
             if not before:
                 return
 
+            # RECEIVED without an immutable original cannot be recovered from
+            # SQLite alone. It is a durable reservation created by the Vision gate,
+            # so give it its one source rediscovery attempt before generic Recovery
+            # can touch the remaining candidates. This is deliberately done after
+            # the historical scan is exhausted: the source checkpoint must never
+            # be reset while the current scan still has unseen candidates.
+            received_missing = {
+                item_id
+                for item_id in before
+                if self.db.get(item_id).state == State.RECEIVED
+                and not self.db.get(item_id).original_path.is_file()
+            }
+            pending_rediscovery = received_missing - rediscovery_attempted
+            if pending_rediscovery:
+                rediscovery_attempted.update(pending_rediscovery)
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    return
+                reset()
+                continue
+
             self.recover_pending()
 
             after = set()
@@ -638,24 +659,6 @@ class Coordinator:
             # remains exhausted and its in-memory _seen set would hide the
             # already-scanned candidate on the same process lifetime.
             if not before.issubset(after):
-                reset = getattr(self.source, "reset_historical_scan", None)
-                if reset is None:
-                    return
-                reset()
-                continue
-
-            # A materialization failure leaves a RECEIVED reservation with
-            # no immutable original. Give each such candidate exactly one
-            # same-process rediscovery attempt before stopping.
-            received_missing = {
-                item_id
-                for item_id in before
-                if self.db.get(item_id).state == State.RECEIVED
-                and not self.db.get(item_id).original_path.is_file()
-            }
-            pending_rediscovery = received_missing - rediscovery_attempted
-            if pending_rediscovery:
-                rediscovery_attempted.update(pending_rediscovery)
                 reset = getattr(self.source, "reset_historical_scan", None)
                 if reset is None:
                     return
