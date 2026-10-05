@@ -594,9 +594,10 @@ class Coordinator:
                 reset()
                 await asyncio.sleep(source_error_backoff)
                 continue
-            if self.db.historical_complete():
-                return
-
+            # Historical completion alone is not enough to stop recovery:
+            # a materialization failure may leave a durable RECEIVED reservation
+            # without its immutable original while the source reports its scan
+            # exhausted. Inspect the durable recovery candidates first.
             before = set()
             for row in self.db.conn.execute(
                 "SELECT content_id, state FROM items "
