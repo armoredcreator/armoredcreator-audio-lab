@@ -161,6 +161,33 @@ class Coordinator:
             asyncio.run(disconnect())
         return item_id
 
+    async def _vision_gate_and_materialize_async(self, message):
+        """Reserve candidate, run Vision, then materialize only when accepted."""
+        ingest = IngestMessage(
+            telegram_message_id=str(message.telegram_message_id),
+            source_id=getattr(message, "source_id", "telegram"),
+            topic_id=getattr(message, "topic_id", None),
+            topic_name=getattr(message, "topic_name", None),
+            original_url=getattr(message, "original_url", None),
+            source_path=getattr(message, "source_path", None),
+            materialize=getattr(message, "materialize", None),
+        )
+        item_id = str(self.sync.reserve_message(ingest))
+        await self._release_source_connection()
+        if self.db.get(item_id).state != State.FAILED:
+            self.run(item_id, stop_after_vision=True)
+        current = self.db.get(item_id)
+        if current.state == State.WAITING_VISION:
+            return item_id, False, current
+        if current.state not in (State.IA, State.STUDIO):
+            return item_id, False, current
+        await self._ensure_source_connection()
+        try:
+            await self.sync.materialize_message_async(ingest)
+        finally:
+            await self._release_source_connection()
+        return item_id, True, self.db.get(item_id)
+
     async def run_catch_up_async(self) -> list[str]:
         """Discover, materialize, release Sync, and process exactly one item at a time.
 
