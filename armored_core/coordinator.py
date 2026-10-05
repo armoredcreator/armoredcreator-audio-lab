@@ -433,33 +433,25 @@ class Coordinator:
         message = messages[0]
         item_id = None
         materialized = False
+        current = None
         try:
-            await self._ensure_source_connection()
-            item_id = await self.sync.ingest_message_async(IngestMessage(
-                telegram_message_id=str(message.telegram_message_id),
-                source_id=getattr(message, "source_id", "telegram"),
-                topic_id=getattr(message, "topic_id", None),
-                topic_name=getattr(message, "topic_name", None),
-                original_url=getattr(message, "original_url", None),
-                source_path=getattr(message, "source_path", None),
-                materialize=getattr(message, "materialize", None),
-            ))
-            materialized = True
+            item_id, materialized, current = await self._vision_gate_and_materialize_async(message)
             marker = getattr(source, "mark_ingested", None)
             if marker is not None:
                 marker(str(message.telegram_message_id))
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception(
-                "[COORDINATOR][LIVE] Falha ao materializar %s; "
-                "checkpoint não avança: %s",
-                getattr(message, "telegram_message_id", "?"),
-                exc,
+                "[COORDINATOR][LIVE] Vision/materialization failed for %s; checkpoint blocked: %s",
+                getattr(message, "telegram_message_id", "?"), exc,
             )
-        finally:
-            await self._release_source_connection()
 
         if not materialized:
+            if current is not None and current.state == State.WAITING_VISION:
+                commit = getattr(source, "commit_live_checkpoints", None)
+                if commit is not None and checkpoints:
+                    commit(checkpoints)
+                return [str(item_id)]
             return []
 
         # Materialization alone never advances the source checkpoint.
