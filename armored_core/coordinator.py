@@ -203,15 +203,20 @@ class Coordinator:
             await self.sync.materialize_message_async(ingest)
             return item_id, True, self.db.get(item_id)
         except Exception:
-            # A technical Vision failure is recoverable. Preserve the immutable
-            # original so the existing Recovery lifecycle remains valid; a
-            # product-unresolved result never reaches this path because Vision
-            # converts it to WAITING_VISION without raising.
-            try:
-                if not self.db.get(item_id).original_path.is_file():
-                    await self.sync.materialize_message_async(ingest)
-            except Exception:
-                pass
+            # A technical Vision failure happens before the materialization
+            # phase and may still need the immutable original for Recovery.
+            # Once Vision has durably accepted the candidate (affiliate_url),
+            # a failure here is the Sync materialization failure itself: do not
+            # retry the download inline. Leave RECEIVED without the original
+            # so the recovery wrapper can perform its single same-run source
+            # rediscovery through the durable checkpoint.
+            current = self.db.get(item_id)
+            if not current.affiliate_url:
+                try:
+                    if not current.original_path.is_file():
+                        await self.sync.materialize_message_async(ingest)
+                except Exception:
+                    pass
             raise
         finally:
             # Sync must be released before Studio/Hub can use the same session.
