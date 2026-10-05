@@ -173,20 +173,22 @@ class Coordinator:
             materialize=getattr(message, "materialize", None),
         )
         item_id = str(self.sync.reserve_message(ingest))
-        await self._release_source_connection()
-        if self.db.get(item_id).state != State.FAILED:
-            self.run(item_id, stop_after_vision=True)
-        current = self.db.get(item_id)
-        if current.state == State.WAITING_VISION:
-            return item_id, False, current
-        if current.state not in (State.IA, State.STUDIO):
-            return item_id, False, current
-        await self._ensure_source_connection()
         try:
+            # Vision V1 is URL-only, so keep Sync connected while it validates
+            # the candidate. We only release the source after the single
+            # accepted candidate has been materialized.
+            if self.db.get(item_id).state != State.FAILED:
+                self.pipeline.run(item_id, stop_after_vision=True)
+            current = self.db.get(item_id)
+            if current.state == State.WAITING_VISION:
+                return item_id, False, current
+            if current.state not in (State.IA, State.STUDIO):
+                return item_id, False, current
             await self.sync.materialize_message_async(ingest)
+            return item_id, True, self.db.get(item_id)
         finally:
+            # Sync must be released before Studio/Hub can use the same session.
             await self._release_source_connection()
-        return item_id, True, self.db.get(item_id)
 
     async def run_catch_up_async(self) -> list[str]:
         """Discover, materialize, release Sync, and process exactly one item at a time.
@@ -751,8 +753,8 @@ class Coordinator:
             if self._runtime_lock_held:
                 self.db.release_runtime_lock("coordinator")
                 self._runtime_lock_held = False
-    def run(self, item_id: str, *, stop_after_vision: bool = False) -> None:
-        self.pipeline.run(item_id, stop_after_vision=stop_after_vision)
+    def run(self, item_id: str) -> None:
+        self.pipeline.run(item_id)
 
     def recover(self, item_id: str) -> None:
         self.recovery.reconcile(item_id)
