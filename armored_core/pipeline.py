@@ -39,8 +39,26 @@ class Pipeline:
             if not stop_after_vision and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
-                self.db.transition(item_id, State.VISION, "pipeline-start")
-                self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
+                if item.affiliate_url:
+                    next_state = (
+                        State.IA
+                        if self.ia is not None
+                        and os.getenv("ARMORED_IA_ENABLED", "1") == "1"
+                        and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1"
+                        else State.STUDIO
+                    )
+                    self.db.transition(item_id, next_state, "vision-gate-complete")
+                    self.trace.emit(
+                        item_id,
+                        "PIPELINE",
+                        "TRANSITION",
+                        old_state=State.RECEIVED.value,
+                        new_state=next_state.value,
+                        reason="vision-gate-complete",
+                    )
+                else:
+                    self.db.transition(item_id, State.VISION, "pipeline-start")
+                    self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
             elif item.state == State.RECOVERY:
                 result = item.result_path
                 if not result and item.affiliate_url:
@@ -95,17 +113,18 @@ class Pipeline:
                         caption=bool(getattr(v, "publication_caption", None)),
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
+                if stop_after_vision:
+                    # The gate persists Vision evidence without changing the
+                    # public lifecycle state. This preserves the original
+                    # Coordinator contract and lets the normal run resume
+                    # from RECEIVED after media materialization.
+                    return
                 if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
                     self.db.transition(item_id, State.IA, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
                 else:
                     self.db.transition(item_id, State.STUDIO, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
-                if stop_after_vision:
-                    # Vision has been durably persisted and the next state is
-                    # already selected. The Coordinator may now materialize the
-                    # media and resume without querying Shopee a second time.
-                    return
             item = self.db.get(item_id)
             if item.state == State.IA:
                 self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)
