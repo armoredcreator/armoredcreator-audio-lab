@@ -612,7 +612,11 @@ class Coordinator:
                 item = self.db.get(str(row["content_id"]))
                 if (
                     item.state == State.RECOVERY
-                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                    or (
+                        item.state in (State.RECEIVED, State.VISION)
+                        and item.affiliate_url
+                        and not item.original_path.is_file()
+                    )
                 ):
                     before.add(str(row["content_id"]))
             if not before:
@@ -650,7 +654,11 @@ class Coordinator:
                 item = self.db.get(str(row["content_id"]))
                 if (
                     item.state == State.RECOVERY
-                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                    or (
+                        item.state in (State.RECEIVED, State.VISION)
+                        and item.affiliate_url
+                        and not item.original_path.is_file()
+                    )
                 ):
                     after.add(str(row["content_id"]))
 
