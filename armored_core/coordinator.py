@@ -269,9 +269,16 @@ class Coordinator:
                     "[COORDINATOR][CATCH-UP] Vision/materialization failed for %s; checkpoint blocked: %s",
                     getattr(message, "telegram_message_id", "?"), exc,
                 )
+                # The gate may fail after reserving the candidate (for example
+                # during Vision or materialization). Re-read durable state so
+                # the lifecycle handler never dereferences a missing local value.
+                try:
+                    current = self.db.get(item_id)
+                except Exception:
+                    current = None
 
             if not materialized:
-                if current.state == State.WAITING_VISION:
+                if current is not None and current.state == State.WAITING_VISION:
                     topic_id = getattr(message, "topic_id", None)
                     commit = getattr(source, "commit_live_checkpoints", None)
                     if topic_id is not None and commit is not None and not checkpoint_blocked:
@@ -447,12 +454,21 @@ class Coordinator:
                 "[COORDINATOR][LIVE] Vision/materialization failed for %s; checkpoint blocked: %s",
                 getattr(message, "telegram_message_id", "?"), exc,
             )
+            try:
+                current = self.db.get(str(item_id)) if item_id is not None else None
+            except Exception:
+                current = None
 
         if not materialized:
             if current is not None and current.state == State.WAITING_VISION:
                 commit = getattr(source, "commit_live_checkpoints", None)
                 if commit is not None and checkpoints:
                     commit(checkpoints)
+                return [str(item_id)]
+            if item_id is not None:
+                # The candidate was durably reserved and attempted; even a
+                # recoverable Vision/materialization failure belongs to this
+                # poll result and must not disappear from lifecycle diagnostics.
                 return [str(item_id)]
             return []
 
