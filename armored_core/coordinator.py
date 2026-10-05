@@ -751,8 +751,8 @@ class Coordinator:
             if self._runtime_lock_held:
                 self.db.release_runtime_lock("coordinator")
                 self._runtime_lock_held = False
-    def run(self, item_id: str) -> None:
-        self.pipeline.run(item_id)
+    def run(self, item_id: str, *, stop_after_vision: bool = False) -> None:
+        self.pipeline.run(item_id, stop_after_vision=stop_after_vision)
 
     def recover(self, item_id: str) -> None:
         self.recovery.reconcile(item_id)
