@@ -622,9 +622,9 @@ class Coordinator:
             if not before:
                 return
 
-            # RECEIVED without an immutable original cannot be recovered from
-            # SQLite alone. It is a durable reservation created by the Vision gate,
-            # so give it its one source rediscovery attempt before generic Recovery
+            # RECEIVED/VISION candidates without an immutable original cannot be
+            # recovered from SQLite alone. They are durable reservations created by
+            # the Vision gate, so give each one its one source rediscovery attempt before generic Recovery
             # can touch the remaining candidates. This is deliberately done after
             # the historical scan is exhausted: the source checkpoint must never
             # be reset while the current scan still has unseen candidates.
