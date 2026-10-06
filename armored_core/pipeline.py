@@ -114,10 +114,19 @@ class Pipeline:
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
                 if stop_after_vision:
-                    # The gate persists Vision evidence without changing the
-                    # public lifecycle state. This preserves the original
-                    # Coordinator contract and lets the normal run resume
-                    # from RECEIVED after media materialization.
+                    # Vision is the pre-download gate. Persist its evidence,
+                    # then return the durable lifecycle to RECEIVED so the
+                    # normal pipeline resumes from the persisted affiliate_url
+                    # after materialization without running Vision twice.
+                    self.db.transition(item_id, State.RECEIVED, "vision-gate-complete")
+                    self.trace.emit(
+                        item_id,
+                        "VISION",
+                        "TRANSITION",
+                        old_state=State.VISION.value,
+                        new_state=State.RECEIVED.value,
+                        reason="vision-gate-complete",
+                    )
                     return
                 if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
                     self.db.transition(item_id, State.IA, "vision-complete")
