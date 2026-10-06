@@ -6,6 +6,11 @@ import sqlite3
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 
@@ -22,9 +27,6 @@ import ArmoredStudio.unified as unified_module
 from ArmoredSync.service import TelegramReader, TelegramSource
 from ArmoredVision.service import ArmoredVision
 from ArmoredIA.service import ArmoredIA
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_credentials() -> None:
