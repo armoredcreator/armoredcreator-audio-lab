@@ -859,10 +859,10 @@ class TelegramSource:
         messages so one grouped album can be resolved as one content without
         sweeping the entire topic.
         """
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -1008,7 +1008,7 @@ class TelegramSource:
         old backlog from being reinterpreted as LIVE after a certification
         cutoff. Normal production CATCH-UP behavior is unchanged.
         """
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
@@ -1065,13 +1065,7 @@ class TelegramSource:
 
 
 class MultiTelegramSource:
-    """Sequential multi-source Telegram adapter.
-
-    It owns one discovery state machine per configured source but shares the
-    single Telethon reader. Fetching is strictly sequential: one candidate is
-    exposed globally, then the Coordinator materializes/releases it before the
-    next source is considered.
-    """
+    """Sequential multi-source Telegram adapter with one global active item."""
 
     def __init__(self, root: Path, reader: Any, db: Database, routes):
         self.root = Path(root)
@@ -1090,12 +1084,13 @@ class MultiTelegramSource:
         )
         self._cursor = 0
         self._last_source: TelegramSource | None = None
+        self._pending_source: TelegramSource | None = None
+        self._pending_message: SyncMessage | None = None
+        self._pending_checkpoints: dict[int, int] = {}
 
     @property
     def mode(self) -> str:
-        if self.db.historical_complete():
-            return "LIVE"
-        return "CATCH_UP"
+        return "LIVE" if self.db.historical_complete() else "CATCH_UP"
 
     @property
     def historical_materialization_failed(self) -> bool:
@@ -1151,14 +1146,67 @@ class MultiTelegramSource:
             self._last_source.mark_materialization_failed()
 
     def reset_historical_scan(self) -> None:
+        self._pending_source = None
+        self._pending_message = None
+        self._pending_checkpoints = {}
         for source in self.sources:
             source.reset_historical_scan()
 
-    async def connect(self):
-        await self.reader.connect()
+    async def fetch_live_candidate_async(self) -> tuple[SyncMessage | None, dict[int, int]]:
+        # A candidate remains pending until the Coordinator confirms PUBLISHED
+        # + cleanup. This prevents a failed pipeline from advancing its source.
+        if self._pending_message is not None:
+            return self._pending_message, dict(self._pending_checkpoints)
 
-    async def disconnect(self):
-        await self.reader.disconnect()
+        if not self.sources:
+            return None, {}
+
+        for offset in range(len(self.sources)):
+            index = (self._cursor + offset) % len(self.sources)
+            source = self.sources[index]
+            message, checkpoints = await source.fetch_live_candidate_async()
+            self._cursor = (index + 1) % len(self.sources)
+            if message is None:
+                # No eligible candidate was returned from this scanned window;
+                # its safe checkpoint can advance immediately.
+                if checkpoints:
+                    source.commit_live_checkpoints(checkpoints)
+                continue
+
+            self._last_source = source
+            self._pending_source = source
+            self._pending_message = message
+            self._pending_checkpoints = dict(checkpoints)
+            return message, dict(checkpoints)
+
+        return None, {}
+
+    async def fetch_live_batch_async(self, limit: int | None = None):
+        message, checkpoints = await self.fetch_live_candidate_async()
+        if message is None:
+            return [], checkpoints
+        return [message], checkpoints
+
+    def commit_live_checkpoints(self, checkpoints: dict[int, int]) -> None:
+        if self._pending_source is not None and self._pending_checkpoints:
+            self._pending_source.commit_live_checkpoints(self._pending_checkpoints)
+        self._pending_source = None
+        self._pending_message = None
+        self._pending_checkpoints = {}
+
+    async def prepare_live_cutover_async(self) -> dict[str, dict[int, int]]:
+        results: dict[str, dict[int, int]] = {}
+        for source in self.sources:
+            results[source.source_id or "source"] = await source.prepare_live_cutover_async()
+        if self.sources and all(source.is_historical_complete() for source in self.sources):
+            self.db.complete_historical_sync()
+        return results
+
+    def connect(self):
+        return self.reader.connect()
+
+    def disconnect(self):
+        return self.reader.disconnect()
 
     def fetch_next(self):
         return asyncio.run(self.fetch_next_async())
