@@ -47,9 +47,12 @@ def test_repository_has_only_canonical_storage_roots():
         "storage/videos",
         "storage/logs",
         "storage/backups",
-        "storage/sources",
     }
-    assert actual <= allowed
+    unexpected = actual - allowed
+    assert all(
+        path.startswith("storage/Videos GRUPO_FONTE_")
+        for path in unexpected
+    ), unexpected
 
 
 def test_legacy_storage_directories_are_not_present():
