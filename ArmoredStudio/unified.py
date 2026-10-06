@@ -134,12 +134,27 @@ class UnifiedStudio:
         )
         audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
-        subprocess.run(
-            [ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(audio_original)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        if audio_profile.kind is AudioKind.NO_AUDIO:
+            duration = float((analysis.video or {}).get("duracao", 0) or 0)
+            duration = max(0.1, duration)
+            subprocess.run(
+                [
+                    ffmpeg, "-y", "-f", "lavfi",
+                    "-i", "anullsrc=r=44100:cl=stereo",
+                    "-t", f"{duration:.3f}", "-ac", "2", "-ar", "44100",
+                    str(audio_original),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            subprocess.run(
+                [ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(audio_original)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
         voice = os.getenv("ARMORED_STUDIO_RVC_VOICE", "melody")
         logging.getLogger(__name__).info(

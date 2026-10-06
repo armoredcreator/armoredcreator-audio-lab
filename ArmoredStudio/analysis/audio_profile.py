@@ -52,6 +52,14 @@ def analyze_audio(source: Path, *, ffmpeg: str = "ffmpeg", vad_mode: int = 3) ->
     than trying to guess a language: foreign narration is still narration.
     """
     executable = shutil.which(ffmpeg) or ffmpeg
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        probe = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(source)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        if probe.returncode == 0 and not probe.stdout.strip():
+            return AudioProfile(AudioKind.NO_AUDIO, 0.0, -120.0, -120.0)
     proc = subprocess.run(
         [
             executable, "-v", "error", "-i", str(source),
