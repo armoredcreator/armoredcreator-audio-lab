@@ -173,16 +173,19 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
         saida.unlink()
 
     if intro:
-        intro_gain = INTRO_MUSIC_VOLUME
-        main_music_gain = MUSIC_VOLUME
-        if audio_profile is not None:
-            try:
-                from ..analysis.audio_profile import intro_music_gain
-                intro_gain = intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present)
-                main_music_gain = 0.8 if audio_profile.speech_present else 0.25
-            except Exception:
-                intro_gain = INTRO_MUSIC_VOLUME
-        filtro = criar_filtro(position, output_largura, output_altura, fps, plan, intro_music_volume=intro_gain, main_music_volume=main_music_gain)
+        # Audio-profile routing decides whether ORIGINAL audio enters RVC.
+        # The finalizer treatment remains canonical for every audio class:
+        # configured effect music and intro/final music keep their existing
+        # gains and remain present in the final mix.
+        filtro = criar_filtro(
+            position,
+            output_largura,
+            output_altura,
+            fps,
+            plan,
+            intro_music_volume=INTRO_MUSIC_VOLUME,
+            main_music_volume=MUSIC_VOLUME,
+        )
         maps = ("[vout]", "[aout]")
     else:
         vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [
