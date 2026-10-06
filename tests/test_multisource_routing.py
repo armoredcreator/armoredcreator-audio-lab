@@ -178,11 +178,16 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
 
 
 
-def test_source_media_workspaces_are_physically_isolated(tmp_path: Path):
+def test_source_media_workspaces_are_physically_isolated(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
+    monkeypatch.setenv("ARMORED_SOURCE_1_VIDEO_DIR", "Videos GRUPO_FONTE_1")
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_2_VIDEO_DIR", "Videos GRUPO_FONTE_2")
     storage = Storage(tmp_path)
     source1 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1003788989075")
     source2 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1002698134896")
 
     assert source1 != source2
-    assert source1 == tmp_path / "storage" / "sources" / "-1003788989075" / "videos" / "77" / "77_1.mp4"
-    assert source2 == tmp_path / "storage" / "sources" / "-1002698134896" / "videos" / "77" / "77_1.mp4"
+    assert source1 == tmp_path / "storage" / "Videos GRUPO_FONTE_1" / "77" / "77_1.mp4"
+    assert source2 == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77" / "77_1.mp4"
+    assert not (tmp_path / "storage" / "sources").exists()
