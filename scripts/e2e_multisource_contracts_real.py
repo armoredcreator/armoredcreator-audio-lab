@@ -357,6 +357,11 @@ async def main_async() -> int:
                     f"AudioKind={profile1.kind.value} "
                     f"speech_present={profile1.speech_present}"
                 )
+                if not profile1.speech_present:
+                    raise AssertionError(
+                        "Source1 não forneceu um candidato com fala; "
+                        "a certificação exige o caso SPEECH/SPEECH_PLUS_MUSIC"
+                    )
 
                 rvc_calls1 = []
                 original_rvc1 = rvc_module.converter_voz
@@ -558,8 +563,8 @@ async def main_async() -> int:
     print("\n[3/3] CERTIFICAÇÃO")
     print("PASS: Vision antes de materialização para as duas fontes.")
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
-    print("PASS: Source 1 publicado e confirmado no tópico 228.")
-    print("PASS: Source 2 sem narração publicado e confirmado no tópico 1160.")
+    print("PASS: Source 1 SPEECH/SPEECH_PLUS_MUSIC publicado e confirmado no tópico 228.")
+    print("PASS: Source 2 MUSIC_ONLY e NO_AUDIO publicados e confirmados no tópico 1160.")
     print("PASS: vídeo sem narração não chamou RVC e mutou o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
