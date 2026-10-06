@@ -495,7 +495,7 @@ async def main_async() -> int:
                     )
 
                 print(
-                    f"[CERT][MUSIC] candidato escolhido={music_item_id}; "
+                    f"[CERT][MUSIC] candidato escolhido={nonspeech_item_id} "
                     "executando Studio real + pipeline completo"
                 )
                 await _process_and_verify(
@@ -518,13 +518,13 @@ async def main_async() -> int:
                         "Studio não gerou silêncio para MUSIC_ONLY; nenhum comando "
                         "FFmpeg com anullsrc foi observado"
                     )
-                if any(str(music_item.original_path) in command for command in silence_commands):
+                if any(str(nonspeech_item.original_path) in command for command in silence_commands):
                     raise AssertionError(
                         "Studio preservou o áudio original no comando de MUSIC_ONLY"
                     )
 
                 print(
-                    "[CERT][MUSIC] PASS: MUSIC_ONLY -> sem RVC -> anullsrc -> "
+                    "[CERT][AUDIO] PASS: vídeo sem narração -> sem RVC -> anullsrc -> "
                     "áudio original não usado na extração -> Studio/Hub/Telegram OK"
                 )
             finally:
@@ -540,7 +540,7 @@ async def main_async() -> int:
     print("PASS: Vision antes de materialização para as duas fontes.")
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
     print("PASS: Source 1 publicado e confirmado no tópico 228.")
-    print("PASS: Source 2 MUSIC_ONLY publicado e confirmado no tópico 1160.")
+    print("PASS: Source 2 sem narração publicado e confirmado no tópico 1160.")
     print("PASS: MUSIC_ONLY não chamou RVC e mutou o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
