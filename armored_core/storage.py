@@ -50,7 +50,10 @@ class Storage:
             path.mkdir(parents=True, exist_ok=True)
 
     def _media_root(self, source_id: str | None = None) -> Path:
-        if source_id is None:
+        # The historical single-source Telegram contract is canonical under
+        # storage/videos. Real multi-source IDs get physically isolated roots
+        # under storage/sources/{source_id}.
+        if source_id is None or str(source_id).strip() == "telegram":
             return self.storage
         return self.sources / source_slug(source_id)
 
