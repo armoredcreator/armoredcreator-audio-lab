@@ -72,8 +72,8 @@ class SyncService:
         if message.source_path is None and message.materialize is None:
             raise ValueError("ingest-message-requires-source-path-or-materializer")
         existing = self.db.conn.execute(
-            "SELECT content_id, original_path, original_url FROM items WHERE telegram_message_id=?",
-            (message.telegram_message_id,),
+            "SELECT content_id, original_path, original_url FROM items WHERE source_id=? AND telegram_message_id=?",
+            (message.source_id, message.telegram_message_id),
         ).fetchone()
         if existing:
             item_id = str(existing["content_id"])
@@ -97,7 +97,11 @@ class SyncService:
             if message.source_path is not None and message.source_path.suffix
             else ".mp4"
         )
-        item_id = str(message.telegram_message_id)
+        item_id = (
+            str(message.telegram_message_id)
+            if str(message.source_id) in {"telegram", "local"}
+            else f"{str(message.source_id)}:{str(message.telegram_message_id)}"
+        )
         original = self.storage.original(item_id, suffix, original_url=message.original_url)
         self.db.reserve_item(
             message.telegram_message_id,
@@ -137,8 +141,8 @@ class SyncService:
         if message.source_path is None and message.materialize is None:
             raise ValueError("ingest-message-requires-source-path-or-materializer")
         existing = self.db.conn.execute(
-            "SELECT content_id, original_path, original_url FROM items WHERE telegram_message_id=?",
-            (message.telegram_message_id,),
+            "SELECT content_id, original_path, original_url FROM items WHERE source_id=? AND telegram_message_id=?",
+            (message.source_id, message.telegram_message_id),
         ).fetchone()
         if existing:
             item_id = str(existing["content_id"])
@@ -147,7 +151,11 @@ class SyncService:
                 self.db.repair_original_path(item_id, original)
             return item_id
         suffix = message.source_path.suffix if message.source_path is not None and message.source_path.suffix else ".mp4"
-        item_id = str(message.telegram_message_id)
+        item_id = (
+            str(message.telegram_message_id)
+            if str(message.source_id) in {"telegram", "local"}
+            else f"{str(message.source_id)}:{str(message.telegram_message_id)}"
+        )
         original = self.storage.original(item_id, suffix, original_url=message.original_url)
         self.db.reserve_item(message.telegram_message_id, source_id=message.source_id, topic_id=message.topic_id,
                              topic_name=message.topic_name, original_url=message.original_url, original_path=original)

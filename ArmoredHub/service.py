@@ -16,10 +16,30 @@ from armored_core.services import PublicationResult, PublicationUnknownError
 class ArmoredHub:
     """Telegram publication boundary; SQLite is the only durable state."""
 
-    def __init__(self, root: Path, db: Database | None = None):
+    def __init__(self, root: Path, db: Database | None = None, routes=()):
         self.root = Path(root)
         self.db = db
+        self.routes = tuple(routes)
         self._destination_chat_id: str | None = None
+
+    def _route_for(self, item: Item):
+        for route in self.routes:
+            if str(route.source.source_id) == str(item.source_id):
+                return route
+        return None
+
+    def _destination_for(self, item: Item) -> tuple[str, int]:
+        record = self._publication(item)
+        if record is not None and record["destination_chat_id"] and record["destination_topic_id"] is not None:
+            return str(record["destination_chat_id"]), int(record["destination_topic_id"])
+        route = self._route_for(item)
+        if route is not None:
+            return str(route.hub.chat_id), int(route.hub.topic_id)
+        chat = self._resolve_destination_chat_id((os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip())
+        topic = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
+        if not chat or not topic:
+            raise RuntimeError("Destino Hub não configurado")
+        return str(chat), int(topic)
 
     def _publication(self, item: Item):
         return self.db.publication(item.content_id) if self.db is not None else None
@@ -106,7 +126,12 @@ class ArmoredHub:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
 
         existing = self._publication(item)
-        self.db.publication_started(item.item_id)
+        chat_id, topic_id = self._destination_for(item)
+        self.db.publication_started(
+            item.item_id,
+            destination_chat_id=chat_id,
+            destination_topic_id=topic_id,
+        )
         check = PublicationCheck.ABSENT if existing is None else self.check_publication(item)
 
         if check == PublicationCheck.CONFIRMED:
@@ -275,12 +300,21 @@ class ArmoredHub:
         """
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
+        record = self._publication(item)
+        route = self._route_for(item)
+        topic_id = str(
+            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
+        ).strip()
         if not api_id or not api_hash or not topic_id:
             return None
 
         try:
-            chat_id = self._resolve_destination_chat_id(topic_id)
+            chat_id = (
+                str(record["destination_chat_id"])
+                if record and record["destination_chat_id"]
+                else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
+            )
         except Exception as exc:
             print(
                 f"[HUB][VERIFY][UNKNOWN] item={item.content_id} "
@@ -439,11 +473,20 @@ class ArmoredHub:
     def _verify_telegram_message(self, message_id: str, item: Item) -> bool | None:
         api_id = os.getenv("TELEGRAM_API_ID")
         api_hash = os.getenv("TELEGRAM_API_HASH")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
+        record = self._publication(item)
+        route = self._route_for(item)
+        topic_id = str(
+            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
+        ).strip()
         if not message_id or not api_id or not api_hash or not topic_id:
             return None
         try:
-            chat_id = self._resolve_destination_chat_id(topic_id)
+            chat_id = (
+                str(record["destination_chat_id"])
+                if record and record["destination_chat_id"]
+                else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
+            )
         except Exception:
             return None
         if not chat_id:
@@ -528,12 +571,21 @@ class ArmoredHub:
 
     def _publish_telegram(self, item: Item, output: Path) -> PublicationResult:
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
-        topic_id = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
+        record = self._publication(item)
+        route = self._route_for(item)
+        topic_id = str(
+            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
+        ).strip()
         if not token or not topic_id:
             raise RuntimeError(
                 "Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN e ARMORED_HUB_TOPIC_ID"
             )
-        chat_id = self._resolve_destination_chat_id(topic_id)
+        chat_id = (
+            str(record["destination_chat_id"])
+            if record and record["destination_chat_id"]
+            else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
+        )
         width, height, duration = self._video_metadata(output)
         self.db.publication_started(
             item.item_id,
@@ -613,5 +665,5 @@ class ArmoredHub:
         return PublicationResult(True, str(message_id))
 
 
-def build(root: Path, db: Database | None = None, **_kwargs):
-    return ArmoredHub(root, db)
+def build(root: Path, db: Database | None = None, **kwargs):
+    return ArmoredHub(root, db, routes=kwargs.get("routes", ()))

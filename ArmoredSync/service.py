@@ -136,10 +136,19 @@ class TelegramSource:
     URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
     SHOPEE_DOMAINS = ("shopee.com.br", "shopee.co", "shopee.ee")
 
-    def __init__(self, root: Path, reader: Any, db: Database | None = None):
+    def __init__(
+        self,
+        root: Path,
+        reader: Any,
+        db: Database | None = None,
+        source: str | None = None,
+        source_id: str | None = None,
+    ):
         self.root = Path(root)
         self.reader = reader
         self.db = db
+        self.source = str(source).strip() if source is not None else None
+        self.source_id = str(source_id).strip() if source_id is not None else None
         self._seen: set[int] = set()
         self._topic_iterator = None
         self._topics: list[tuple[int, str]] | None = None
@@ -154,7 +163,11 @@ class TelegramSource:
 
     @property
     def mode(self) -> str:
-        return self.db.sync_mode() if self.db is not None else ("LIVE" if self._historical_complete else "CATCH_UP")
+        if self.db is None:
+            return "LIVE" if self._historical_complete else "CATCH_UP"
+        if self.source_id:
+            return self.db.source_sync_mode(self.source_id)
+        return self.db.sync_mode()
 
     @staticmethod
     def _read_historical_limit() -> int | None:
@@ -224,7 +237,10 @@ class TelegramSource:
 
     def mark_historical_complete(self) -> None:
         if self.db is not None:
-            self.db.complete_historical_sync()
+            if self.source_id:
+                self.db.complete_source_historical_sync(self.source_id)
+            else:
+                self.db.complete_historical_sync()
         self._historical_complete = True
         self._historical_scan_exhausted = True
         self._historical_checkpoints.clear()
@@ -407,10 +423,10 @@ class TelegramSource:
     async def fetch_next_async(self) -> SyncMessage | None:
         if self.is_historical_complete():
             return None
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         if not self.reader.client.is_connected():
@@ -655,10 +671,10 @@ class TelegramSource:
         if self.is_historical_complete():
             return
 
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -698,10 +714,10 @@ class TelegramSource:
         if self.is_historical_complete():
             return [], {}
 
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -734,10 +750,10 @@ class TelegramSource:
 
     async def fetch_live_batch_async(self, limit: int | None = None) -> tuple[list[SyncMessage], dict[int, int]]:
         """Discover all new LIVE candidates, resolving grouped albums consistently."""
-        source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -750,7 +766,11 @@ class TelegramSource:
             candidates: list[SyncMessage] = []
             checkpoints: dict[int, int] = {}
             for topic_id, topic_name in self._topics:
-                checkpoint = self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0
+                checkpoint = (
+                    self.db.source_sync_topic_checkpoint(self.source_id, topic_id)
+                    if self.db is not None and self.source_id
+                    else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
+                )
                 messages = []
                 async for message in self.reader.client.iter_messages(
                     source_ref,
@@ -858,8 +878,9 @@ class TelegramSource:
             self._live_topic_index = (self._live_topic_index + 1) % len(self._topics)
 
             checkpoint = (
-                self.db.sync_topic_checkpoint(topic_id)
-                if self.db is not None else 0
+                self.db.source_sync_topic_checkpoint(self.source_id, topic_id)
+                if self.db is not None and self.source_id
+                else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
             )
 
             try:
@@ -1028,7 +1049,10 @@ class TelegramSource:
                 (name for tid, name in (self._topics or []) if tid == topic_id),
                 str(topic_id),
             )
-            self.db.set_sync_topic_checkpoint(topic_id, topic_name, message_id)
+            if self.source_id:
+                self.db.set_source_sync_topic_checkpoint(self.source_id, topic_id, topic_name, message_id)
+            else:
+                self.db.set_sync_topic_checkpoint(topic_id, topic_name, message_id)
 
     def fetch_live_batch(self) -> tuple[list[SyncMessage], dict[int, int]]:
         return asyncio.run(self.fetch_live_batch_async())
@@ -1037,6 +1061,106 @@ class TelegramSource:
         self._seen.add(int(telegram_message_id))
 
     def fetch_next(self) -> SyncMessage | None:
+        return asyncio.run(self.fetch_next_async())
+
+
+class MultiTelegramSource:
+    """Sequential multi-source Telegram adapter.
+
+    It owns one discovery state machine per configured source but shares the
+    single Telethon reader. Fetching is strictly sequential: one candidate is
+    exposed globally, then the Coordinator materializes/releases it before the
+    next source is considered.
+    """
+
+    def __init__(self, root: Path, reader: Any, db: Database, routes):
+        self.root = Path(root)
+        self.reader = reader
+        self.db = db
+        self.routes = tuple(routes)
+        self.sources = tuple(
+            TelegramSource(
+                root,
+                reader,
+                db,
+                source=route.source.chat_id,
+                source_id=route.source.source_id,
+            )
+            for route in self.routes
+        )
+        self._cursor = 0
+        self._last_source: TelegramSource | None = None
+
+    @property
+    def mode(self) -> str:
+        if self.db.historical_complete():
+            return "LIVE"
+        return "CATCH_UP"
+
+    @property
+    def historical_materialization_failed(self) -> bool:
+        return any(source.historical_materialization_failed for source in self.sources)
+
+    @property
+    def historical_scan_exhausted(self) -> bool:
+        return bool(self.sources) and all(source.historical_scan_exhausted for source in self.sources)
+
+    @property
+    def historical_limit_reached(self) -> bool:
+        return any(source.historical_limit_reached for source in self.sources)
+
+    @property
+    def historical_collection_limited(self) -> bool:
+        return any(source.historical_collection_limited for source in self.sources)
+
+    def is_historical_complete(self) -> bool:
+        return self.db.historical_complete()
+
+    async def fetch_next_async(self) -> SyncMessage | None:
+        if self.db.historical_complete():
+            return None
+        if not self.sources:
+            raise RuntimeError("Nenhuma fonte Telegram configurada")
+        for offset in range(len(self.sources)):
+            index = (self._cursor + offset) % len(self.sources)
+            source = self.sources[index]
+            if source.is_historical_complete():
+                continue
+            message = await source.fetch_next_async()
+            if message is not None:
+                self._cursor = (index + 1) % len(self.sources)
+                self._last_source = source
+                return message
+        if self.historical_scan_exhausted and not self.historical_materialization_failed:
+            self.complete_historical_sync()
+        return None
+
+    def complete_historical_sync(self) -> None:
+        if self.historical_scan_exhausted and not self.historical_materialization_failed:
+            for source in self.sources:
+                if not source.is_historical_complete():
+                    source.complete_historical_sync()
+            self.db.complete_historical_sync()
+
+    def mark_ingested(self, telegram_message_id: str) -> None:
+        if self._last_source is not None:
+            self._last_source.mark_ingested(telegram_message_id)
+
+    def mark_materialization_failed(self) -> None:
+        if self._last_source is not None:
+            self._last_source.mark_materialization_failed()
+
+    def reset_historical_scan(self) -> None:
+        for source in self.sources:
+            source.reset_historical_scan()
+
+    async def connect(self):
+        await self.reader.connect()
+
+    async def disconnect(self):
+        await self.reader.disconnect()
+
+    def fetch_next(self):
         return asyncio.run(self.fetch_next_async())
 
 

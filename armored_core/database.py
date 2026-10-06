@@ -17,7 +17,7 @@ class Database:
         PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS items (
             content_id TEXT PRIMARY KEY,
-            telegram_message_id TEXT NOT NULL UNIQUE,
+            telegram_message_id TEXT NOT NULL,
             source_id TEXT NOT NULL DEFAULT 'telegram',
             topic_id INTEGER,
             topic_name TEXT,
@@ -70,6 +70,19 @@ class Database:
             last_seen_message_id INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS sync_source_topics (
+            source_id TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            topic_name TEXT NOT NULL,
+            last_seen_message_id INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(source_id, topic_id)
+        );
+        CREATE TABLE IF NOT EXISTS sync_sources (
+            source_id TEXT PRIMARY KEY,
+            historical_complete INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS caption_candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content_id TEXT NOT NULL,
@@ -94,6 +107,7 @@ class Database:
         """)
         self.conn.commit()
         self._migrate_columns()
+        self._migrate_telegram_identity()
 
     def _migrate_columns(self) -> None:
         # Legacy Vision evidence tables, when present in an existing database,
@@ -126,6 +140,125 @@ class Database:
             for name, sql in columns:
                 if name not in existing:
                     self.conn.execute(sql)
+        self.conn.commit()
+
+    def _migrate_telegram_identity(self) -> None:
+        """Remove the legacy global UNIQUE constraint from Telegram message IDs.
+
+        Telegram message IDs are unique only inside a chat. Source-aware identity
+        is therefore (source_id, telegram_message_id).
+        """
+        indexes = self.conn.execute("PRAGMA index_list(items)").fetchall()
+        legacy_unique = False
+        for row in indexes:
+            if int(row["unique"] or 0) != 1:
+                continue
+            cols = self.conn.execute(f'PRAGMA index_info("{row["name"]}")').fetchall()
+            names = [str(col["name"]) for col in cols]
+            if names == ["telegram_message_id"]:
+                legacy_unique = True
+                break
+        if legacy_unique:
+            self.conn.execute("""
+                CREATE TABLE items_new (
+                    content_id TEXT PRIMARY KEY,
+                    telegram_message_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL DEFAULT 'telegram',
+                    topic_id INTEGER,
+                    topic_name TEXT,
+                    original_url TEXT,
+                    state TEXT NOT NULL,
+                    original_path TEXT NOT NULL,
+                    original_sha256 TEXT,
+                    working_path TEXT,
+                    result_path TEXT,
+                    affiliate_name TEXT,
+                    affiliate_url TEXT,
+                    publication_caption TEXT,
+                    ia_context_json TEXT NOT NULL DEFAULT '{}',
+                    affiliate_urls_json TEXT NOT NULL DEFAULT '[]',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    recovery_count INTEGER NOT NULL DEFAULT 0,
+                    cleanup_completed INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            columns = [
+                "content_id","telegram_message_id","source_id","topic_id","topic_name",
+                "original_url","state","original_path","original_sha256","working_path",
+                "result_path","affiliate_name","affiliate_url","publication_caption",
+                "ia_context_json","affiliate_urls_json","attempts","recovery_count",
+                "cleanup_completed","last_error","created_at","updated_at"
+            ]
+            self.conn.execute(
+                f"INSERT INTO items_new ({','.join(columns)}) "
+                f"SELECT {','.join(columns)} FROM items"
+            )
+            self.conn.execute("DROP TABLE items")
+            self.conn.execute("ALTER TABLE items_new RENAME TO items")
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_items_source_message "
+                "ON items(source_id, telegram_message_id)"
+            )
+            self.conn.commit()
+        else:
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_items_source_message "
+                "ON items(source_id, telegram_message_id)"
+            )
+            self.conn.commit()
+
+    def source_sync_mode(self, source_id: str) -> str:
+        row = self.conn.execute(
+            "SELECT historical_complete FROM sync_sources WHERE source_id=?",
+            (str(source_id),),
+        ).fetchone()
+        return "LIVE" if row and int(row["historical_complete"]) else "CATCH_UP"
+
+    def complete_source_historical_sync(self, source_id: str) -> None:
+        self.conn.execute(
+            "INSERT INTO sync_sources(source_id,historical_complete) VALUES(?,1) "
+            "ON CONFLICT(source_id) DO UPDATE SET historical_complete=1, updated_at=CURRENT_TIMESTAMP",
+            (str(source_id),),
+        )
+        self.conn.commit()
+
+    def reset_source_historical_sync(self, source_id: str) -> None:
+        self.conn.execute(
+            "INSERT INTO sync_sources(source_id,historical_complete) VALUES(?,0) "
+            "ON CONFLICT(source_id) DO UPDATE SET historical_complete=0, updated_at=CURRENT_TIMESTAMP",
+            (str(source_id),),
+        )
+        self.conn.commit()
+
+    def all_sources_historical_complete(self, source_ids) -> bool:
+        ids = [str(value) for value in source_ids]
+        if not ids:
+            return False
+        rows = self.conn.execute(
+            f"SELECT source_id,historical_complete FROM sync_sources "
+            f"WHERE source_id IN ({','.join('?' for _ in ids)})",
+            ids,
+        ).fetchall()
+        return len(rows) == len(ids) and all(int(row["historical_complete"]) == 1 for row in rows)
+
+    def source_sync_topic_checkpoint(self, source_id: str, topic_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT last_seen_message_id FROM sync_source_topics WHERE source_id=? AND topic_id=?",
+            (str(source_id), int(topic_id)),
+        ).fetchone()
+        return int(row["last_seen_message_id"]) if row else 0
+
+    def set_source_sync_topic_checkpoint(self, source_id: str, topic_id: int, topic_name: str, message_id: int) -> None:
+        self.conn.execute(
+            "INSERT INTO sync_source_topics(source_id,topic_id,topic_name,last_seen_message_id) VALUES(?,?,?,?) "
+            "ON CONFLICT(source_id,topic_id) DO UPDATE SET topic_name=excluded.topic_name, "
+            "last_seen_message_id=MAX(sync_source_topics.last_seen_message_id, excluded.last_seen_message_id), "
+            "updated_at=CURRENT_TIMESTAMP",
+            (str(source_id), int(topic_id), str(topic_name), int(message_id)),
+        )
         self.conn.commit()
 
     def sync_mode(self) -> str:
@@ -178,7 +311,17 @@ class Database:
         original_url: str | None = None,
         original_path: Path | None = None,
     ) -> str:
-        content_id = str(telegram_message_id)
+        existing = self.conn.execute(
+            "SELECT content_id FROM items WHERE source_id=? AND telegram_message_id=?",
+            (str(source_id), str(telegram_message_id)),
+        ).fetchone()
+        if existing:
+            return str(existing["content_id"])
+        content_id = (
+            str(telegram_message_id)
+            if str(source_id) in {"telegram", "local"}
+            else f"{str(source_id)}:{str(telegram_message_id)}"
+        )
         cur = self.conn.execute(
             "INSERT INTO items (content_id,telegram_message_id,source_id,topic_id,topic_name,original_url,state,original_path) VALUES (?,?,?,?,?,?,?,?)",
             (
@@ -217,7 +360,17 @@ class Database:
         source_id: str = "telegram", topic_id: int | None = None,
         topic_name: str | None = None, original_url: str | None = None,
     ) -> str:
-        content_id = str(telegram_message_id)
+        existing = self.conn.execute(
+            "SELECT content_id FROM items WHERE source_id=? AND telegram_message_id=?",
+            (str(source_id), str(telegram_message_id)),
+        ).fetchone()
+        if existing:
+            return str(existing["content_id"])
+        content_id = (
+            str(telegram_message_id)
+            if str(source_id) in {"telegram", "local"}
+            else f"{str(source_id)}:{str(telegram_message_id)}"
+        )
         self.conn.execute(
             "INSERT INTO items (content_id,telegram_message_id,source_id,topic_id,topic_name,original_url,state,original_path) VALUES (?,?,?,?,?,?,?,?)",
             (content_id, telegram_message_id, source_id, topic_id, topic_name, original_url,
