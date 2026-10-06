@@ -47,6 +47,7 @@ def test_repository_has_only_canonical_storage_roots():
         "storage/videos",
         "storage/logs",
         "storage/backups",
+        "storage/sources",
     }
     assert actual <= allowed
 
