@@ -290,3 +290,12 @@ def test_no_audio_studio_uses_same_no_speech_audio_path(tmp_path, monkeypatch):
     assert any("anullsrc=r=44100:cl=stereo" in " ".join(cmd) for cmd in commands)
     assert not any(str(source) in cmd for cmd in commands if "anullsrc=r=44100:cl=stereo" in " ".join(cmd))
     assert captured["profile"].kind == unified_module.AudioKind.NO_AUDIO
+
+
+def test_finalizer_keeps_canonical_intro_and_effect_gains():
+    from ArmoredStudio.processing.finalizer import criar_filtro, INTRO_MUSIC_VOLUME, MUSIC_VOLUME
+
+    filtro = criar_filtro("final", 1080, 1920, "30/1", plan={})
+
+    assert f"volume={MUSIC_VOLUME:.3f}[music]" in filtro
+    assert f"volume={INTRO_MUSIC_VOLUME:.3f}," in filtro
