@@ -313,8 +313,10 @@ class ArmoredHub:
         api_hash = os.getenv("TELEGRAM_API_HASH")
         record = self._publication(item)
         route = self._route_for(item)
+        record_topic = self._publication_field(record, "destination_topic_id")
         topic_id = str(
-            self._publication_field(record, "destination_topic_id")
+            record_topic
+            if record_topic is not None
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not api_id or not api_hash or not topic_id:
@@ -486,8 +488,10 @@ class ArmoredHub:
         api_hash = os.getenv("TELEGRAM_API_HASH")
         record = self._publication(item)
         route = self._route_for(item)
+        record_topic = self._publication_field(record, "destination_topic_id")
         topic_id = str(
-            self._publication_field(record, "destination_topic_id")
+            record_topic
+            if record_topic is not None
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not message_id or not api_id or not api_hash or not topic_id:
@@ -584,8 +588,10 @@ class ArmoredHub:
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
         record = self._publication(item)
         route = self._route_for(item)
+        record_topic = self._publication_field(record, "destination_topic_id")
         topic_id = str(
-            self._publication_field(record, "destination_topic_id")
+            record_topic
+            if record_topic is not None
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not token or not topic_id:
