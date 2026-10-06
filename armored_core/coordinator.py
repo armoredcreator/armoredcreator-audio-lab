@@ -725,11 +725,15 @@ class Coordinator:
         self.startup_reconciler.run()
         self.recover_pending()
 
-        if (
-            not self.db.historical_complete()
-            or not self.db.has_sync_checkpoints()
-        ):
-            if self.db.historical_complete() and not self.db.has_sync_checkpoints():
+        source_complete = (
+            self.source.is_historical_complete()
+            if self.source is not None and hasattr(self.source, "is_historical_complete")
+            else self.db.historical_complete()
+        )
+        if not source_complete or not self.db.has_sync_checkpoints():
+            if (
+                self.source is None or not hasattr(self.source, "is_historical_complete")
+            ) and self.db.historical_complete() and not self.db.has_sync_checkpoints():
                 self.db.set_sync_mode("CATCH_UP")
             await self._run_catch_up_with_recovery_async()
 
