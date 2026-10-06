@@ -668,12 +668,11 @@ Essa migração preserva o significado de WAITING_VISION como estado exclusivo d
 
 # 14. Credenciais e configuração
 
-Segredos ficam em credentials/project.env.
-Configuração operacional fica em .env.
-
+Toda a configuração do projeto fica exclusivamente em credentials/project.env.
+Não existe um segundo arquivo .env de configuração do projeto.
 Valores secretos não são registrados no Git.
 
-Configuração ArmoredIA usada no launcher:
+Configuração ArmoredIA usada no launcher (agora em credentials/project.env):
 
 ~~~
 ARMORED_IA_ENABLED=1
@@ -707,7 +706,8 @@ O código atual descobre os tópicos do fórum e não usa ARMORED_SYNC_TOPIC_NAM
 
 START_ALL.bat é o launcher operacional único.
 
-Ele configura ArmoredIA, localiza e inicia o Bot API local, localiza Python e chama run_coordinator.py.
+Ele carrega credentials/project.env, localiza e inicia o Bot API local, localiza Python e chama run_coordinator.py.
+A configuração do Bot API (incluindo BOT_API_EXE e BOT_API_PORT) também vem de credentials/project.env.
 
 Ele não implementa uma pipeline paralela.
 
