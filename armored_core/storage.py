@@ -23,7 +23,9 @@ def source_slug(source_id: str | None) -> str:
     value = str(source_id or "").strip()
     if not value:
         return "legacy"
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._-")
+    if value == "telegram":
+        return "legacy"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip(".")
     return safe or "legacy"
 
 class Storage:
