@@ -189,11 +189,7 @@ class Coordinator:
             # connection while the single candidate is reserved and materialized.
             # Vision itself is URL-only, so no media is downloaded here.
             await self._ensure_source_connection()
-            if self.db.get(item_id).state != State.FAILED:
-                self.pipeline.run(item_id, stop_after_vision=True)
             current = self.db.get(item_id)
-            if current.state == State.WAITING_VISION:
-                return item_id, False, current
 
             # A previous Vision-approved candidate may have failed during
             # materialization. It remains RECEIVED with durable affiliate_url
@@ -202,6 +198,12 @@ class Coordinator:
             if current.affiliate_url and not current.original_path.is_file():
                 await self.sync.materialize_message_async(ingest)
                 return item_id, True, self.db.get(item_id)
+
+            if current.state != State.FAILED:
+                self.pipeline.run(item_id, stop_after_vision=True)
+            current = self.db.get(item_id)
+            if current.state == State.WAITING_VISION:
+                return item_id, False, current
 
             # stop_after_vision returns the accepted candidate to RECEIVED with
             # durable Vision evidence. The normal pipeline resumes only after
