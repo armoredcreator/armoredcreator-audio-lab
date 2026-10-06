@@ -1185,8 +1185,12 @@ class MultiTelegramSource:
         return [message], checkpoints
 
     def commit_live_checkpoints(self, checkpoints: dict[int, int]) -> None:
-        if self._pending_source is not None:
-            self._pending_source.commit_live_checkpoints(self._pending_checkpoints or checkpoints)
+        # CATCH-UP commits belong to the source that produced the current
+        # candidate; LIVE commits belong to the pending source. In both cases
+        # only one source checkpoint is advanced for the active item.
+        target = self._pending_source or self._last_source
+        if target is not None:
+            target.commit_live_checkpoints(self._pending_checkpoints or checkpoints)
         self._pending_source = None
         self._pending_message = None
         self._pending_checkpoints = {}
