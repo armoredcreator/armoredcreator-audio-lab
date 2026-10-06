@@ -423,7 +423,7 @@ class TelegramSource:
     async def fetch_next_async(self) -> SyncMessage | None:
         if self.is_historical_complete():
             return None
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()

@@ -30,19 +30,21 @@ class ArmoredHub:
 
     def _destination_for(self, item: Item) -> tuple[str, int]:
         record = self._publication(item)
-        if record is not None and record["destination_chat_id"] and record["destination_topic_id"] is not None:
+        if record is not None and record.get("destination_chat_id") and record.get("destination_topic_id") is not None:
             return str(record["destination_chat_id"]), int(record["destination_topic_id"])
         route = self._route_for(item)
         if route is not None:
             return str(route.hub.chat_id), int(route.hub.topic_id)
-        chat = self._resolve_destination_chat_id((os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip())
         topic = (os.getenv("ARMORED_HUB_TOPIC_ID") or "").strip()
+        chat = (os.getenv("ARMORED_CREATOR_GROUP_ID") or "").strip()
+        if not chat:
+            chat = self._resolve_destination_chat_id(topic)
         if not chat or not topic:
             raise RuntimeError("Destino Hub não configurado")
         return str(chat), int(topic)
 
     def _publication(self, item: Item):
-        return self.db.publication(item.content_id) if self.db is not None else None
+        return self.db.publication(item.content_id) if self.db is not None and hasattr(self.db, "publication") else None
 
     @staticmethod
     def _run_async(coro):
@@ -303,7 +305,7 @@ class ArmoredHub:
         record = self._publication(item)
         route = self._route_for(item)
         topic_id = str(
-            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            record.get("destination_topic_id") if record and record.get("destination_topic_id") is not None
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not api_id or not api_hash or not topic_id:
