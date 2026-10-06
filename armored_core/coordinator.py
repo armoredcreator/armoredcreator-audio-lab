@@ -752,7 +752,12 @@ class Coordinator:
             # never fall through into LIVE. The only exception is the explicit
             # bounded certification flow, which first performs the source's
             # durable history-to-LIVE cutover.
-            if not self.db.historical_complete():
+            source_complete = (
+                self.source.is_historical_complete()
+                if self.source is not None and hasattr(self.source, "is_historical_complete")
+                else self.db.historical_complete()
+            )
+            if not source_complete:
                 if bounded_completed and cert_then_live:
                     cutover = getattr(self.source, "prepare_live_cutover_async", None)
                     if cutover is None:
@@ -766,8 +771,9 @@ class Coordinator:
                         "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
                         "cutover histórico seguro executado; entrando em LIVE"
                     )
+                    source_complete = self.source.is_historical_complete()
 
-                if not self.db.historical_complete():
+                if not source_complete:
                     import logging
                     logging.getLogger(__name__).warning(
                         "[COORDINATOR][CATCH-UP] Histórico ainda não concluído; "
