@@ -194,14 +194,21 @@ class Coordinator:
             current = self.db.get(item_id)
             if current.state == State.WAITING_VISION:
                 return item_id, False, current
-            # stop_after_vision deliberately leaves the durable state at
-            # RECEIVED/VISION; affiliate_url is the durable proof that Vision
-            # accepted the candidate. The normal pipeline run resumes from
-            # that proof after materialization.
+
+            # A previous Vision-approved candidate may have failed during
+            # materialization. It remains RECEIVED with durable affiliate_url
+            # but without ORIGINAL. On rediscovery, materialize first; never let
+            # Pipeline.run() jump directly to Studio against a missing ORIGINAL.
+            if current.affiliate_url and not current.original_path.is_file():
+                await self.sync.materialize_message_async(ingest)
+                return item_id, True, self.db.get(item_id)
+
+            # stop_after_vision returns the accepted candidate to RECEIVED with
+            # durable Vision evidence. The normal pipeline resumes only after
+            # the ORIGINAL exists.
             if not current.affiliate_url:
                 return item_id, False, current
-            await self.sync.materialize_message_async(ingest)
-            return item_id, True, self.db.get(item_id)
+            return item_id, True, current
         except Exception:
             # A technical Vision failure happens before the materialization
             # phase and may still need the immutable original for Recovery.
