@@ -88,6 +88,7 @@ class SyncService:
                     item_id,
                     ".mp4",
                     original_url=existing["original_url"] or message.original_url,
+                    source_id=message.source_id,
                 )
                 self.db.repair_original_path(item_id, original)
             partial = original.with_suffix(original.suffix + ".part")
