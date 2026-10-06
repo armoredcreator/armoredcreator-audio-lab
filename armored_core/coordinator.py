@@ -606,8 +606,8 @@ class Coordinator:
             before = set()
             for row in self.db.conn.execute(
                 "SELECT content_id, state FROM items "
-                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
-                (State.RECOVERY.value, State.RECEIVED.value),
+                "WHERE state IN (?, ?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value, State.VISION.value),
             ).fetchall():
                 item = self.db.get(str(row["content_id"]))
                 if (
