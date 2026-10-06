@@ -43,12 +43,8 @@ class Coordinator:
         if project_credentials.exists():
             load_dotenv(project_credentials, override=True)
 
-        # .env contains project configuration, not secrets. Keep externally
-        # supplied configuration compatible while preventing it from replacing
-        # the project credential source above.
-        project_config = storage.root / ".env"
-        if project_config.exists():
-            load_dotenv(project_config, override=False)
+        # credentials/project.env is the single project configuration source.
+        # Do not load .env or inherit a second project-local configuration file.
 
         db = Database(storage.database / "armoredcreator.db")
         if bindings is None:
@@ -161,6 +157,75 @@ class Coordinator:
             asyncio.run(disconnect())
         return item_id
 
+    async def _vision_gate_and_materialize_async(self, message):
+        """Reserve candidate, run Vision, then materialize only when accepted."""
+        ingest = IngestMessage(
+            telegram_message_id=str(message.telegram_message_id),
+            source_id=getattr(message, "source_id", "telegram"),
+            topic_id=getattr(message, "topic_id", None),
+            topic_name=getattr(message, "topic_name", None),
+            original_url=getattr(message, "original_url", None),
+            source_path=getattr(message, "source_path", None),
+            materialize=getattr(message, "materialize", None),
+        )
+        # Test doubles/subclasses that override Coordinator.run() are part of
+        # the original lifecycle contract: let them receive a normally materialized
+        # candidate instead of forcing the new Vision gate through their override.
+        if getattr(self.run, "__func__", None) is not Coordinator.run:
+            await self._ensure_source_connection()
+            try:
+                item_id = str(await self.sync.ingest_message_async(ingest))
+                return item_id, True, self.db.get(item_id)
+            finally:
+                await self._release_source_connection()
+
+        item_id = str(self.sync.reserve_message(ingest))
+        try:
+            # Match the original Coordinator lifecycle: Sync owns the source
+            # connection while the single candidate is reserved and materialized.
+            # Vision itself is URL-only, so no media is downloaded here.
+            await self._ensure_source_connection()
+            current = self.db.get(item_id)
+
+            # A previous Vision-approved candidate may have failed during
+            # materialization. It remains RECEIVED with durable affiliate_url
+            # but without ORIGINAL. On rediscovery, materialize first; never let
+            # Pipeline.run() jump directly to Studio against a missing ORIGINAL.
+            if current.affiliate_url and not current.original_path.is_file():
+                await self.sync.materialize_message_async(ingest)
+                return item_id, True, self.db.get(item_id)
+
+            if current.state != State.FAILED:
+                self.pipeline.run(item_id, stop_after_vision=True)
+            current = self.db.get(item_id)
+            if current.state == State.WAITING_VISION:
+                return item_id, False, current
+
+            # stop_after_vision returns the accepted candidate to RECEIVED with
+            # durable Vision evidence. Materialize only now, after the gate.
+            if not current.affiliate_url:
+                return item_id, False, current
+            if not current.original_path.is_file():
+                await self.sync.materialize_message_async(ingest)
+                return item_id, True, self.db.get(item_id)
+            return item_id, True, current
+        except Exception:
+            # A technical Vision failure happens before the materialization
+            # phase and may still need the immutable original for Recovery.
+            # Once Vision has durably accepted the candidate (affiliate_url),
+            # a failure here is the Sync materialization failure itself: do not
+            # retry the download inline. Leave RECEIVED without the original
+            # so the recovery wrapper can perform its single same-run source
+            # rediscovery through the durable checkpoint.
+            # Vision is now a hard pre-download gate. A technical Vision
+            # failure is durable RECOVERY, but it must never trigger a download
+            # merely to make Recovery possible. Recovery/source rediscovery will
+            # retry the candidate from Telegram without materializing media first.
+            raise
+        finally:
+            # Sync must be released before Studio/Hub can use the same session.
+            await self._release_source_connection()
+
     async def run_catch_up_async(self) -> list[str]:
         """Discover, materialize, release Sync, and process exactly one item at a time.
 
@@ -224,29 +289,12 @@ class Coordinator:
                 continue
 
             materialized = False
+            current = None
             try:
-                await self._ensure_source_connection()
-                item_id = str(await self.sync.ingest_message_async(IngestMessage(
-                    telegram_message_id=item_id,
-                    source_id=getattr(message, "source_id", "telegram"),
-                    topic_id=getattr(message, "topic_id", None),
-                    topic_name=getattr(message, "topic_name", None),
-                    original_url=getattr(message, "original_url", None),
-                    source_path=getattr(message, "source_path", None),
-                    materialize=getattr(message, "materialize", None),
-                )))
-                materialized = True
+                item_id, materialized, current = await self._vision_gate_and_materialize_async(message)
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
                     marker(str(message.telegram_message_id))
-                # Do not count here. A candidate is counted only after
-                # the complete pipeline reaches PUBLISHED and cleanup succeeds.
-                # This keeps the bounded CATCH-UP limit tied to completed items.
-                # Checkpoint advancement is deliberately deferred until the
-                # entire item has been processed, published, confirmed and cleaned.
-                # A materialized-but-unprocessed item must remain discoverable after
-                # a crash/restart; SQLite + the canonical workspace provide recovery.
-                pass
             except Exception as exc:
                 checkpoint_blocked = True
                 marker = getattr(source, "mark_materialization_failed", None)
@@ -254,15 +302,24 @@ class Coordinator:
                     marker()
                 import logging
                 logging.getLogger(__name__).exception(
-                    "[COORDINATOR][CATCH-UP] Falha ao materializar %s; "
-                    "checkpoint não avança e o próximo candidato poderá continuar: %s",
-                    getattr(message, "telegram_message_id", "?"),
-                    exc,
+                    "[COORDINATOR][CATCH-UP] Vision/materialization failed for %s; checkpoint blocked: %s",
+                    getattr(message, "telegram_message_id", "?"), exc,
                 )
-            finally:
-                await self._release_source_connection()
+                # The gate may fail after reserving the candidate (for example
+                # during Vision or materialization). Re-read durable state so
+                # the lifecycle handler never dereferences a missing local value.
+                try:
+                    current = self.db.get(item_id)
+                except Exception:
+                    current = None
 
             if not materialized:
+                if current is not None and current.state == State.WAITING_VISION:
+                    topic_id = getattr(message, "topic_id", None)
+                    commit = getattr(source, "commit_live_checkpoints", None)
+                    if topic_id is not None and commit is not None and not checkpoint_blocked:
+                        commit({int(topic_id): int(message.telegram_message_id)})
+                    processed.append(item_id)
                 continue
 
             # Exactly one item crosses the Sync -> Pipeline boundary.
@@ -419,35 +476,36 @@ class Coordinator:
             return []
 
         message = messages[0]
-        item_id = None
+        item_id = str(message.telegram_message_id)
         materialized = False
+        current = None
         try:
-            await self._ensure_source_connection()
-            item_id = await self.sync.ingest_message_async(IngestMessage(
-                telegram_message_id=str(message.telegram_message_id),
-                source_id=getattr(message, "source_id", "telegram"),
-                topic_id=getattr(message, "topic_id", None),
-                topic_name=getattr(message, "topic_name", None),
-                original_url=getattr(message, "original_url", None),
-                source_path=getattr(message, "source_path", None),
-                materialize=getattr(message, "materialize", None),
-            ))
-            materialized = True
+            item_id, materialized, current = await self._vision_gate_and_materialize_async(message)
             marker = getattr(source, "mark_ingested", None)
             if marker is not None:
                 marker(str(message.telegram_message_id))
         except Exception as exc:
             import logging
             logging.getLogger(__name__).exception(
-                "[COORDINATOR][LIVE] Falha ao materializar %s; "
-                "checkpoint não avança: %s",
-                getattr(message, "telegram_message_id", "?"),
-                exc,
+                "[COORDINATOR][LIVE] Vision/materialization failed for %s; checkpoint blocked: %s",
+                getattr(message, "telegram_message_id", "?"), exc,
             )
-        finally:
-            await self._release_source_connection()
+            try:
+                current = self.db.get(str(item_id)) if item_id is not None else None
+            except Exception:
+                current = None
 
         if not materialized:
+            if current is not None and current.state == State.WAITING_VISION:
+                commit = getattr(source, "commit_live_checkpoints", None)
+                if commit is not None and checkpoints:
+                    commit(checkpoints)
+                return [str(item_id)]
+            if item_id is not None:
+                # The candidate was durably reserved and attempted; even a
+                # recoverable Vision/materialization failure belongs to this
+                # poll result and must not disappear from lifecycle diagnostics.
+                return [str(item_id)]
             return []
 
         # Materialization alone never advances the source checkpoint.
@@ -545,36 +603,73 @@ class Coordinator:
                 reset()
                 await asyncio.sleep(source_error_backoff)
                 continue
-            if self.db.historical_complete():
-                return
-
+            # Historical completion alone is not enough to stop recovery:
+            # a materialization failure may leave a durable RECEIVED reservation
+            # without its immutable original while the source reports its scan
+            # exhausted. Inspect the durable recovery candidates first.
             before = set()
             for row in self.db.conn.execute(
                 "SELECT content_id, state FROM items "
-                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
-                (State.RECOVERY.value, State.RECEIVED.value),
+                "WHERE state IN (?, ?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value, State.VISION.value),
             ).fetchall():
                 item = self.db.get(str(row["content_id"]))
                 if (
                     item.state == State.RECOVERY
-                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                    or (
+                        item.state in (State.RECEIVED, State.VISION)
+                        and item.affiliate_url
+                        and not item.original_path.is_file()
+                    )
                 ):
                     before.add(str(row["content_id"]))
             if not before:
                 return
+
+            # Pre-download candidates without an immutable original cannot be
+            # recovered from SQLite alone. They are durable reservations created by
+            # the Vision gate (RECEIVED/VISION) or technical Vision failures (RECOVERY),
+            # so give each one its source rediscovery attempt before generic Recovery
+            # can touch the remaining candidates. This is deliberately done after
+            # the historical scan is exhausted: the source checkpoint must never
+            # be reset while the current scan still has unseen candidates.
+            source_rediscovery_missing = {
+                item_id
+                for item_id in before
+                if not self.db.get(item_id).original_path.is_file()
+                and (
+                    self.db.get(item_id).state == State.RECOVERY
+                    or (
+                        self.db.get(item_id).state in (State.RECEIVED, State.VISION)
+                        and self.db.get(item_id).affiliate_url
+                    )
+                )
+            }
+            pending_rediscovery = source_rediscovery_missing - rediscovery_attempted
+            if pending_rediscovery:
+                rediscovery_attempted.update(pending_rediscovery)
+                reset = getattr(self.source, "reset_historical_scan", None)
+                if reset is None:
+                    return
+                reset()
+                continue
 
             self.recover_pending()
 
             after = set()
             for row in self.db.conn.execute(
                 "SELECT content_id, state FROM items "
-                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
-                (State.RECOVERY.value, State.RECEIVED.value),
+                "WHERE state IN (?, ?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value, State.VISION.value),
             ).fetchall():
                 item = self.db.get(str(row["content_id"]))
                 if (
                     item.state == State.RECOVERY
-                    or (item.state == State.RECEIVED and not item.original_path.is_file())
+                    or (
+                        item.state in (State.RECEIVED, State.VISION)
+                        and item.affiliate_url
+                        and not item.original_path.is_file()
+                    )
                 ):
                     after.add(str(row["content_id"]))
 
@@ -583,24 +678,6 @@ class Coordinator:
             # remains exhausted and its in-memory _seen set would hide the
             # already-scanned candidate on the same process lifetime.
             if not before.issubset(after):
-                reset = getattr(self.source, "reset_historical_scan", None)
-                if reset is None:
-                    return
-                reset()
-                continue
-
-            # A materialization failure leaves a RECEIVED reservation with
-            # no immutable original. Give each such candidate exactly one
-            # same-process rediscovery attempt before stopping.
-            received_missing = {
-                item_id
-                for item_id in before
-                if self.db.get(item_id).state == State.RECEIVED
-                and not self.db.get(item_id).original_path.is_file()
-            }
-            pending_rediscovery = received_missing - rediscovery_attempted
-            if pending_rediscovery:
-                rediscovery_attempted.update(pending_rediscovery)
                 reset = getattr(self.source, "reset_historical_scan", None)
                 if reset is None:
                     return

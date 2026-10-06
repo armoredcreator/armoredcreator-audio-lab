@@ -22,7 +22,7 @@ class Pipeline:
         """Attach the Coordinator shutdown signal without coupling layers."""
         self._shutdown_checker = checker
 
-    def run(self, item_id: str) -> None:
+    def run(self, item_id: str, *, stop_after_vision: bool = False) -> None:
         item = self.db.get(item_id)
         self.trace.emit(item_id, "PIPELINE", "START", state=item.state.value, attempt=item.attempts + 1)
         self.log.info("[PIPELINE][ITEM %s] início state=%s", item.content_id, item.state.value)
@@ -33,11 +33,32 @@ class Pipeline:
             return
         try:
             self.db.record_attempt(item_id)
-            if not item.original_path.is_file():
+            # Vision V1 validates the Shopee product from the URL alone.
+            # The immutable media is therefore required only after Vision has
+            # accepted the candidate. This is the key bandwidth-saving gate.
+            if not stop_after_vision and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
-                self.db.transition(item_id, State.VISION, "pipeline-start")
-                self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
+                if item.affiliate_url:
+                    next_state = (
+                        State.IA
+                        if self.ia is not None
+                        and os.getenv("ARMORED_IA_ENABLED", "1") == "1"
+                        and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1"
+                        else State.STUDIO
+                    )
+                    self.db.transition(item_id, next_state, "vision-gate-complete")
+                    self.trace.emit(
+                        item_id,
+                        "PIPELINE",
+                        "TRANSITION",
+                        old_state=State.RECEIVED.value,
+                        new_state=next_state.value,
+                        reason="vision-gate-complete",
+                    )
+                else:
+                    self.db.transition(item_id, State.VISION, "pipeline-start")
+                    self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
             elif item.state == State.RECOVERY:
                 result = item.result_path
                 if not result and item.affiliate_url:
@@ -92,13 +113,27 @@ class Pipeline:
                         caption=bool(getattr(v, "publication_caption", None)),
                     )
                 self.log.info("[PIPELINE][ITEM %s] VISION concluída", item_id)
+                if stop_after_vision:
+                    # Vision is the pre-download gate. Persist its evidence,
+                    # then return the durable lifecycle to RECEIVED so the
+                    # normal pipeline resumes from the persisted affiliate_url
+                    # after materialization without running Vision twice.
+                    self.db.transition(item_id, State.RECEIVED, "vision-gate-complete")
+                    self.trace.emit(
+                        item_id,
+                        "VISION",
+                        "TRANSITION",
+                        old_state=State.VISION.value,
+                        new_state=State.RECEIVED.value,
+                        reason="vision-gate-complete",
+                    )
+                    return
                 if self.ia is not None and os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
                     self.db.transition(item_id, State.IA, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
                 else:
                     self.db.transition(item_id, State.STUDIO, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
-
             item = self.db.get(item_id)
             if item.state == State.IA:
                 self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)

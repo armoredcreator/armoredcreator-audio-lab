@@ -132,6 +132,50 @@ class SyncService:
         if original.exists():
             original.unlink()
 
+    def reserve_message(self, message: IngestMessage) -> int:
+        """Reserve one candidate in SQLite without downloading its media."""
+        if message.source_path is None and message.materialize is None:
+            raise ValueError("ingest-message-requires-source-path-or-materializer")
+        existing = self.db.conn.execute(
+            "SELECT content_id, original_path, original_url FROM items WHERE telegram_message_id=?",
+            (message.telegram_message_id,),
+        ).fetchone()
+        if existing:
+            item_id = str(existing["content_id"])
+            if not str(existing["original_path"] or "").strip():
+                original = self.storage.original(item_id, ".mp4", original_url=existing["original_url"] or message.original_url)
+                self.db.repair_original_path(item_id, original)
+            return item_id
+        suffix = message.source_path.suffix if message.source_path is not None and message.source_path.suffix else ".mp4"
+        item_id = str(message.telegram_message_id)
+        original = self.storage.original(item_id, suffix, original_url=message.original_url)
+        self.db.reserve_item(message.telegram_message_id, source_id=message.source_id, topic_id=message.topic_id,
+                             topic_name=message.topic_name, original_url=message.original_url, original_path=original)
+        return item_id
+
+    async def materialize_message_async(self, message: IngestMessage) -> int:
+        """Materialize an already-reserved candidate into its immutable path."""
+        item_id, original, partial = self._prepare_ingest(message)
+        if original.exists():
+            return item_id
+        try:
+            if partial.exists():
+                partial.unlink()
+            if message.materialize is not None:
+                result = message.materialize(partial)
+                if inspect.isawaitable(result):
+                    await result
+            else:
+                source = message.source_path.resolve()
+                if not source.is_file():
+                    raise FileNotFoundError(source)
+                shutil.copy2(source, partial)
+            return self._finish_ingest(item_id, original, partial)
+        except Exception:
+            self._cleanup_ingest_files(original, partial)
+            self.db.rollback_ingest()
+            raise
+
     def ingest_message(self, message: IngestMessage) -> int:
         item_id, original, partial = self._prepare_ingest(message)
         if original.exists():

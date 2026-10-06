@@ -10,49 +10,41 @@ rem ARMORED CREATOR - START ALL
 rem TELEGRAM BOT API LOCAL -> COORDINATOR
 rem ================================================================
 
-rem Vision V1 + ArmoredIA/Caption ativos.
-set "ARMORED_IA_ENABLED=1"
-set "ARMORED_IA_CAPTION_ENABLED=1"
-set "ARMORED_IA_MODEL=gemini-3.1-flash-lite"
-set "ARMORED_IA_API_TIMEOUT=90"
-set "ARMORED_IA_MAX_CANDIDATES=10"
-set "ARMORED_IA_MAX_ATTEMPTS=5"
-set "ARMORED_IA_RETRY_DELAY=2"
+rem Toda configuracao do projeto vem exclusivamente de credentials\\project.env.
+rem START_ALL somente prepara o processo Windows e inicia os componentes.
 
-rem Caminho do Telegram Bot API nesta maquina.
-rem Para outra maquina, altere somente esta linha.
-set "BOT_API_EXE=C:\Users\Administrador\Downloads\TelegramBotAPI\telegram-bot-api\build\Release\telegram-bot-api.exe"
-set "BOT_API_PORT=8081"
-set "ARMORED_TELEGRAM_BOT_API_URL=http://127.0.0.1:%BOT_API_PORT%/bot"
-set "ARMORED_TELEGRAM_BOT_API_FILE_URL=http://127.0.0.1:%BOT_API_PORT%/file/bot"
+if not exist "%ARMORED_ROOT%credentials\\project.env" (
+    echo ERRO: credentials\\project.env nao encontrado.
+    exit /b 1
+)
+
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ARMORED_ROOT%credentials\\project.env") do (
+    if not "%%A"=="" set "%%A=%%B"
+)
+
+if not defined TELEGRAM_API_ID (
+    echo ERRO: TELEGRAM_API_ID nao encontrado em credentials\\project.env
+    exit /b 1
+)
+
+if not defined TELEGRAM_API_HASH (
+    echo ERRO: TELEGRAM_API_HASH nao encontrado em credentials\\project.env
+    exit /b 1
+)
+
+if not defined BOT_API_EXE (
+    echo ERRO: BOT_API_EXE nao encontrado em credentials\\project.env
+    exit /b 1
+)
+
+if not defined BOT_API_PORT set "BOT_API_PORT=8081"
+if not defined ARMORED_TELEGRAM_BOT_API_URL set "ARMORED_TELEGRAM_BOT_API_URL=http://127.0.0.1:%BOT_API_PORT%/bot"
+if not defined ARMORED_TELEGRAM_BOT_API_FILE_URL set "ARMORED_TELEGRAM_BOT_API_FILE_URL=http://127.0.0.1:%BOT_API_PORT%/file/bot"
 set "BOT_API_STARTED_BY_SCRIPT=0"
 set "BOT_API_PID="
 set "BOT_API_DIR="
 
 for %%I in ("%BOT_API_EXE%") do set "BOT_API_DIR=%%~dpI"
-
-rem ================================================================
-rem 1. Carrega API ID/HASH do credentials\project.env
-rem    Os valores nao sao exibidos.
-rem ================================================================
-
-if not exist "%ARMORED_ROOT%credentials\project.env" (
-    echo ERRO: credentials\project.env nao encontrado.
-    exit /b 1
-)
-
-for /f "delims=" %%A in ('powershell -NoProfile -Command "$v=Get-Content -LiteralPath '%ARMORED_ROOT%credentials\\project.env' | ForEach-Object { $_ -replace '^\\uFEFF','' } | Where-Object { $_ -match '^TELEGRAM_API_ID=' } | Select-Object -First 1; if($v){$v -replace '^TELEGRAM_API_ID=',''}"') do set "TELEGRAM_API_ID=%%A"
-for /f "delims=" %%A in ('powershell -NoProfile -Command "$v=Get-Content -LiteralPath '%ARMORED_ROOT%credentials\\project.env' | ForEach-Object { $_ -replace '^\\uFEFF','' } | Where-Object { $_ -match '^TELEGRAM_API_HASH=' } | Select-Object -First 1; if($v){$v -replace '^TELEGRAM_API_HASH=',''}"') do set "TELEGRAM_API_HASH=%%A"
-
-if not defined TELEGRAM_API_ID (
-    echo ERRO: TELEGRAM_API_ID nao encontrado em credentials\project.env
-    exit /b 1
-)
-
-if not defined TELEGRAM_API_HASH (
-    echo ERRO: TELEGRAM_API_HASH nao encontrado em credentials\project.env
-    exit /b 1
-)
 
 echo ================================================================
 echo ARMORED CREATOR - START ALL

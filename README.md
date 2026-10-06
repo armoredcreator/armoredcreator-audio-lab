@@ -1,11 +1,11 @@
-# ArmoredCreator — Arquitetura Final, Contrato Operacional e Certificação
+# ArmoredCreator Audio Lab — Evolução Vision-before-Download
 
-> **Snapshot final certificado:** commit de código `69fb9a5fc771298dafc04fdc420ff1a0bd8ec227`; suíte local `175 passed, 1 skipped`; CI do código final verde; CI pós-merge `#952` verde; LIVE real comprovado; grupo `450/451/452` fechado e comprovado ponta a ponta; versão congelada em `v1.0.0-certified`.
-
-> Laboratório de reconstrução e certificação: armoredcreator/armoredcreator-test.
-> O repositório oficial armoredcreator/armoredcreator e a branch audit/baseline-2026-09-19 permanecem intocados.
-
-Este documento é a referência operacional da versão atual. Ele descreve o fluxo completo, os limites de cada componente, as regras de recuperação, a publicação Telegram, a política de legenda, a observabilidade e os critérios para a certificação histórica.
+> **Laboratório de implementação:** esta branch evolui o comportamento congelado de referência sem alterar o repositório original.
+>
+> Referência congelada: `armoredcreator/armoredcreator-test`.
+> Implementação desta evolução: `armoredcreator/armoredcreator-audio-lab`.
+>
+> Branch: `feat/source2-vision-before-download`.
 
 ---
 
@@ -22,39 +22,40 @@ Telegram fonte
 ArmoredSync
   |
   v
-SQLite + workspace canônico
+RESERVE no SQLite (sem download)
   |
   v
 Coordinator
   |
   +----> ArmoredVision V1
   |          |
-  |          +----> contexto V1 persistido
-  |
-  +----> ArmoredIA
+  |          +----> sem produto exato -> WAITING_VISION
   |          |
-  |          +----> legenda válida
+  |          +----> affiliate_url persistida
   |
-  +----> ArmoredStudio
-  |          |
-  |          +----> vídeo final
+  v
+materialização/download do único candidato aceito
   |
-  +----> ArmoredHub
-             |
-             v
-       Telegram destino
-             |
-             v
-        reconciliação
-             |
-             v
-          CONFIRMED
-             |
-             v
-          PUBLISHED
-             |
-             v
-           cleanup
+  v
+ArmoredIA
+  |
+  v
+ArmoredStudio / RVC
+  |
+  v
+ArmoredHub
+  |
+  v
+Telegram destino
+  |
+  v
+CONFIRMED
+  |
+  v
+PUBLISHED
+  |
+  v
+cleanup
 ~~~
 
 ---
@@ -67,10 +68,15 @@ O Coordinator é a única raiz que monta Sync, Vision, ArmoredIA, Studio, Hub e 
 
 ## 2.2 Um único item ativo
 
+O item é primeiro reservado no SQLite. A mídia **não é baixada** antes da Vision V1.
+
 ~~~
 descobrir A
+-> reservar A no SQLite
+-> Vision V1
+   -> WAITING_VISION: sem download
+   -> resolvido: persistir affiliate_url
 -> materializar A
--> Vision
 -> ArmoredIA
 -> Studio
 -> Hub
@@ -79,7 +85,7 @@ descobrir A
 -> descobrir B
 ~~~
 
-Não existe pré-download de lote.
+Não existe pré-download de lote e não existe download para um candidato que a Vision V1 não tenha aceitado.
 
 ## 2.3 Nenhuma fila física
 
@@ -161,10 +167,13 @@ Responsabilidades:
 - conectar à fonte Telegram;
 - descobrir histórico;
 - descobrir LIVE;
-- localizar candidatos;
-- materializar um único candidato;
+- localizar exatamente um candidato;
+- **reservar o candidato no SQLite sem baixar a mídia**;
+- materializar somente depois da aprovação da Vision V1;
 - controlar checkpoints;
 - administrar o lifecycle da sessão Telethon.
+
+A materialização permanece canônica em `storage/videos/{content_id}/`.
 
 ## 4.1 Regra de candidato
 
@@ -305,6 +314,30 @@ URL original
 Vision não gera mais a legenda.
 Vision não executa Gemini.
 Vision não escolhe candidatas de legenda.
+
+## 6.3 Vision-before-download
+
+Esta branch introduz uma fronteira nova sem duplicar a Vision V1.
+
+~~~
+Sync descobre
+-> SQLite RECEIVED / reserva
+-> Vision V1 usando URL/evidência
+-> se não resolver: WAITING_VISION, zero download
+-> se resolver: affiliate_url persistida
+-> materialização do candidato
+-> pipeline normal a partir da evidência persistida
+~~~
+
+### Regras
+
+- Vision V1 continua sendo a implementação existente de resolução Shopee.
+- `affiliate_url` persistida é a evidência de aceitação para materialização.
+- `WAITING_VISION` não materializa mídia.
+- Falha técnica da Vision vira `RECOVERY` sem download.
+- Um `RECOVERY` sem ORIGINAL é redescoberto na fonte antes do Recovery genérico, porque o Recovery estrito continua exigindo ORIGINAL.
+- Falha de download depois da aprovação da Vision também mantém o checkpoint bloqueado e recebe uma tentativa de redescoberta pela fonte.
+- Depois que a mídia é materializada, `Pipeline.run()` retoma usando a evidência V1 persistida e não precisa executar Vision novamente.
 
 ## 6.2 Contexto durável
 
@@ -635,12 +668,11 @@ Essa migração preserva o significado de WAITING_VISION como estado exclusivo d
 
 # 14. Credenciais e configuração
 
-Segredos ficam em credentials/project.env.
-Configuração operacional fica em .env.
-
+Toda a configuração do projeto fica exclusivamente em credentials/project.env.
+Não existe um segundo arquivo .env de configuração do projeto.
 Valores secretos não são registrados no Git.
 
-Configuração ArmoredIA usada no launcher:
+Configuração ArmoredIA usada no launcher (agora em credentials/project.env):
 
 ~~~
 ARMORED_IA_ENABLED=1
@@ -674,7 +706,8 @@ O código atual descobre os tópicos do fórum e não usa ARMORED_SYNC_TOPIC_NAM
 
 START_ALL.bat é o launcher operacional único.
 
-Ele configura ArmoredIA, localiza e inicia o Bot API local, localiza Python e chama run_coordinator.py.
+Ele carrega credentials/project.env, localiza e inicia o Bot API local, localiza Python e chama run_coordinator.py.
+A configuração do Bot API (incluindo BOT_API_EXE e BOT_API_PORT) também vem de credentials/project.env.
 
 Ele não implementa uma pipeline paralela.
 
@@ -702,20 +735,31 @@ RVC e análises podem manter detalhes completos em arquivo sem despejar esses da
 
 # 17. Testes automatizados
 
-A suíte cobre arquitetura, Coordinator, Database, Storage, Sync, Recovery, Startup Audit, Telegram lifecycle, CATCH-UP, LIVE, reconnect, Vision V1, ArmoredIA, Policy, provider Gemini, Studio, RVC, FFmpeg, Hub, reconciliação, idempotência e cleanup.
+A suíte do laboratório cobre a arquitetura existente e os gates da evolução Vision-before-download.
 
-A suíte do código final foi executada localmente após o merge do fechamento:
+Casos críticos desta branch:
 
 ~~~
-python -m pytest -q -W error::RuntimeWarning
+Vision aceita
+-> materializer chamado
+-> ORIGINAL criado
+-> pipeline normal pode continuar
 
-175 passed
-1 skipped
+Vision não resolve
+-> WAITING_VISION
+-> materializer nunca chamado
+
+Vision falha tecnicamente
+-> RECOVERY
+-> materializer nunca chamado
+-> fonte pode redescobrir o candidato
+
+download falha depois da Vision
+-> checkpoint permanece bloqueado
+-> uma redescoberta pode tentar novamente
 ~~~
 
-O mesmo código final foi validado no GitHub Actions pelos runs `#946` e `#947`, ambos com conclusão `success`.
-
-O fechamento adiciona a cobertura de ranking de caption, auditoria individual das candidatas e sobrevivência a erro transitório em LIVE.
+O GitHub Actions do commit `b6258472edca0d2e0390766e0f913aa4330dfb8b` concluiu o job `unit` com sucesso no run `#24`: `179 passed, 1 skipped`.
 
 Comando principal:
 
