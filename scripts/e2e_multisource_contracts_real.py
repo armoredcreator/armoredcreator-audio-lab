@@ -16,7 +16,6 @@ from armored_core.storage import Storage
 from ArmoredHub.service import ArmoredHub
 from ArmoredStudio.analysis.audio_profile import AudioKind, analyze_audio
 from ArmoredStudio.service import ArmoredStudio
-from ArmoredStudio import processing as _studio_processing  # noqa: F401
 import ArmoredStudio.processing.rvc as rvc_module
 import ArmoredStudio.unified as unified_module
 from ArmoredSync.service import TelegramReader, TelegramSource
@@ -57,7 +56,14 @@ def _require_real_runtime(routes) -> None:
         )
 
 
-def _production_has_candidate(prod_conn: sqlite3.Connection, source_id: str, message_id: str, url: str | None) -> bool:
+def _production_has_candidate(
+    prod_conn: sqlite3.Connection | None,
+    source_id: str,
+    message_id: str,
+    url: str | None,
+) -> bool:
+    if prod_conn is None:
+        return False
     row = prod_conn.execute(
         """
         SELECT 1
@@ -77,17 +83,16 @@ def _production_has_candidate(prod_conn: sqlite3.Connection, source_id: str, mes
     return row is not None
 
 
-def _assert_route(routes, source_id: str) -> tuple[str, int]:
-    for route in routes:
-        if str(route.source.source_id) == str(source_id):
-            return str(route.hub.chat_id), int(route.hub.topic_id)
-    raise AssertionError(f"Rota ausente para source_id={source_id}")
-
-
 def _assert_isolated_workspace(storage: Storage, item) -> None:
+    source_folder = (
+        "Videos GRUPO_FONTE_2"
+        if str(item.source_id) == "-1002698134896"
+        else "Videos GRUPO_FONTE_1"
+    )
     workspace = Path(item.workspace).resolve()
-    expected_root = (storage.storage / ("Videos GRUPO_FONTE_2" if item.source_id == "-1002698134896" else "Videos GRUPO_FONTE_1")).resolve()
-    expected = expected_root / str(item.content_id)
+    expected = (
+        storage.storage / source_folder / str(item.content_id)
+    ).resolve()
     if workspace != expected:
         raise AssertionError(
             f"workspace incorreto: esperado={expected} atual={workspace}"
@@ -98,7 +103,11 @@ def _assert_isolated_workspace(storage: Storage, item) -> None:
         raise AssertionError("storage/sources não pode existir neste contrato")
 
 
-async def _gate_one(coordinator: Coordinator, source: TelegramSource, message) -> tuple[str, object | None]:
+async def _gate_one(
+    coordinator: Coordinator,
+    source: TelegramSource,
+    message,
+) -> tuple[str, object | None]:
     events: list[str] = []
     original_identify = coordinator.pipeline.vision.identify
     original_materialize = message.materialize
@@ -133,15 +142,14 @@ async def _gate_one(coordinator: Coordinator, source: TelegramSource, message) -
         coordinator.pipeline.vision.identify = original_identify
 
     actual_id, materialized, item = result
+    source.mark_ingested(str(message.telegram_message_id))
     if not materialized:
-        source.mark_ingested(str(message.telegram_message_id))
         if getattr(item, "state", None) != State.WAITING_VISION:
             raise AssertionError(
                 f"Vision não materializou e estado inesperado: {getattr(item, 'state', None)}"
             )
         return actual_id, None
 
-    source.mark_ingested(str(message.telegram_message_id))
     if events != ["vision", "download"]:
         raise AssertionError(f"contrato Vision->download violado: {events}")
     _assert_isolated_workspace(coordinator.storage, item)
@@ -150,7 +158,13 @@ async def _gate_one(coordinator: Coordinator, source: TelegramSource, message) -
     return actual_id, item
 
 
-def _build_runtime(temp_root: Path, reader: TelegramReader, source, source_id: str, routes):
+def _build_runtime(
+    temp_root: Path,
+    reader: TelegramReader,
+    source,
+    source_id: str,
+    routes,
+):
     storage = Storage(temp_root)
     db = Database(storage.database / "armoredcreator.db")
     for route in routes:
@@ -166,10 +180,22 @@ def _build_runtime(temp_root: Path, reader: TelegramReader, source, source_id: s
         source=source,
         source_id=source_id,
     )
-    return Coordinator(db, storage, vision, studio, publisher, source=source_obj, ia=ia)
+    return Coordinator(
+        db,
+        storage,
+        vision,
+        studio,
+        publisher,
+        source=source_obj,
+        ia=ia,
+    )
 
 
-async def _discover_unprocessed(source: TelegramSource, prod_conn: sqlite3.Connection, limit: int) -> object | None:
+async def _discover_unprocessed(
+    source: TelegramSource,
+    prod_conn: sqlite3.Connection | None,
+    limit: int,
+):
     for _ in range(limit):
         message = await source.fetch_next_async()
         if message is None:
@@ -181,8 +207,8 @@ async def _discover_unprocessed(source: TelegramSource, prod_conn: sqlite3.Conne
             message.original_url,
         ):
             print(
-                f"[CERT][SKIP] source={message.source_id} message={message.telegram_message_id} "
-                "já existe na produção"
+                f"[CERT][SKIP] source={message.source_id} "
+                f"message={message.telegram_message_id} já existe na produção"
             )
             source.mark_ingested(str(message.telegram_message_id))
             continue
@@ -190,7 +216,12 @@ async def _discover_unprocessed(source: TelegramSource, prod_conn: sqlite3.Conne
     return None
 
 
-async def _process_and_verify(coordinator: Coordinator, item_id: str, expected_chat: str, expected_topic: int):
+async def _process_and_verify(
+    coordinator: Coordinator,
+    item_id: str,
+    expected_chat: str,
+    expected_topic: int,
+):
     coordinator.run(item_id)
     item = coordinator.db.get(item_id)
     if item.state != State.PUBLISHED:
@@ -203,24 +234,26 @@ async def _process_and_verify(coordinator: Coordinator, item_id: str, expected_c
         raise AssertionError("publication ausente no SQLite")
     if str(publication["destination_chat_id"]) != expected_chat:
         raise AssertionError(
-            f"destination_chat_id incorreto: {publication['destination_chat_id']} != {expected_chat}"
+            f"destination_chat_id incorreto: "
+            f"{publication['destination_chat_id']} != {expected_chat}"
         )
     if int(publication["destination_topic_id"]) != expected_topic:
         raise AssertionError(
-            f"destination_topic_id incorreto: {publication['destination_topic_id']} != {expected_topic}"
+            f"destination_topic_id incorreto: "
+            f"{publication['destination_topic_id']} != {expected_topic}"
         )
     message_id = str(publication["published_message_id"] or "")
     if not message_id:
         raise AssertionError("Telegram message_id real ausente")
 
-    status = coordinator.publisher.check_publication(item)
+    status = coordinator.pipeline.publisher.check_publication(item)
     if status != PublicationCheck.CONFIRMED:
         raise AssertionError(
             f"reconciliação Telegram não confirmou a publicação: {status}"
         )
     print(
-        f"[CERT][HUB] item={item_id} -> chat={expected_chat} tópico={expected_topic} "
-        f"Telegram message={message_id} CONFIRMED"
+        f"[CERT][HUB] item={item_id} -> chat={expected_chat} "
+        f"tópico={expected_topic} Telegram message={message_id} CONFIRMED"
     )
     return item
 
@@ -232,11 +265,18 @@ async def main_async() -> int:
 
     route1 = next(r for r in routes if str(r.source.key) == "source1")
     route2 = next(r for r in routes if str(r.source.key) == "source2")
+
     print("=" * 72)
     print("ARMORED CREATOR - E2E REAL DOS CONTRATOS MULTISOURCE")
     print("=" * 72)
-    print(f"Source1: {route1.source.chat_id} -> Hub {route1.hub.chat_id} tópico {route1.hub.topic_id}")
-    print(f"Source2: {route2.source.chat_id} -> Hub {route2.hub.chat_id} tópico {route2.hub.topic_id}")
+    print(
+        f"Source1: {route1.source.chat_id} -> "
+        f"Hub {route1.hub.chat_id} tópico {route1.hub.topic_id}"
+    )
+    print(
+        f"Source2: {route2.source.chat_id} -> "
+        f"Hub {route2.hub.chat_id} tópico {route2.hub.topic_id}"
+    )
 
     production_db_path = ROOT / "storage" / "database" / "armoredcreator.db"
     prod_conn = None
@@ -249,7 +289,7 @@ async def main_async() -> int:
         prod_conn.execute("PRAGMA busy_timeout=10000")
         print(f"[CERT][DB] produção somente-leitura: {production_db_path}")
     else:
-        print("[CERT][DB] produção não encontrada; a seleção não terá filtro histórico.")
+        print("[CERT][DB] produção não encontrada; seleção sem filtro histórico.")
 
     api_id = int(os.environ["TELEGRAM_API_ID"])
     api_hash = os.environ["TELEGRAM_API_HASH"]
@@ -264,161 +304,169 @@ async def main_async() -> int:
         str(ROOT / "ArmoredStudio" / "assets" / "banner.png"),
     )
 
-    with tempfile.TemporaryDirectory(prefix="armoredcreator-cert-") as temp_dir:
-        temp_root = Path(temp_dir)
+    try:
+        with tempfile.TemporaryDirectory(prefix="armoredcreator-cert-") as temp_dir:
+            temp_root = Path(temp_dir)
 
-        # ------------------------------------------------------------------
-        # SOURCE 1: Vision -> materialization -> full real pipeline -> Hub.
-        # ------------------------------------------------------------------
-        print("\n[1/3] SOURCE 1 - Vision antes do download + storage + publicação real")
-        coordinator1 = _build_runtime(
-            temp_root / "source1",
-            reader,
-            route1.source.chat_id,
-            route1.source.source_id,
-            routes,
-        )
-        try:
-            message1 = await _discover_unprocessed(
-                coordinator1.source,
-                prod_conn,
-                int(os.getenv("ARMORED_CERT_SOURCE_SCAN_LIMIT", "12")),
-            )
-            if message1 is None:
-                raise RuntimeError("Source 1 não encontrou candidato novo dentro do limite")
-
-            item_id1, item1 = await _gate_one(coordinator1, coordinator1.source, message1)
-            if item1 is None:
-                raise RuntimeError(
-                    f"Source 1 encontrou WAITING_VISION no candidato {item_id1}; "
-                    "certificação exige um candidato resolvido."
-                )
             print(
-                f"[CERT][GATE] Source1 item={item_id1} "
-                f"Vision->download confirmado; ORIGINAL={item1.original_path}"
+                "\n[1/3] SOURCE 1 - Vision antes do download + "
+                "storage + publicação real"
             )
-            await _process_and_verify(
-                coordinator1,
-                item_id1,
-                str(route1.hub.chat_id),
-                int(route1.hub.topic_id),
+            coordinator1 = _build_runtime(
+                temp_root / "source1",
+                reader,
+                route1.source.chat_id,
+                route1.source.source_id,
+                routes,
             )
-        finally:
-            coordinator1.close()
-
-        # ------------------------------------------------------------------
-        # SOURCE 2: procurar candidato realmente MUSIC_ONLY. O download só
-        # acontece depois da Vision em cada tentativa, e a tentativa fica no
-        # workspace/DB temporários até o fim da certificação.
-        # ------------------------------------------------------------------
-        print("\n[2/3] SOURCE 2 - procurar candidato real MUSIC_ONLY sem baixar antes da Vision")
-        coordinator2 = _build_runtime(
-            temp_root / "source2",
-            reader,
-            route2.source.chat_id,
-            route2.source.source_id,
-            routes,
-        )
-
-        rvc_called: list[tuple[tuple, dict]] = []
-        original_rvc = rvc_module.converter_voz
-        original_run = unified_module.subprocess.run
-        captured_ffmpeg: list[list[str]] = []
-
-        def forbidden_rvc(*args, **kwargs):
-            rvc_called.append((args, kwargs))
-            raise AssertionError("RVC foi chamado para MUSIC_ONLY")
-
-        def capture_run(command, *args, **kwargs):
-            captured_ffmpeg.append([str(value) for value in command])
-            return original_run(command, *args, **kwargs)
-
-        rvc_module.converter_voz = forbidden_rvc
-        unified_module.subprocess.run = capture_run
-
-        try:
-            music_limit = int(os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "8"))
-            music_item_id = None
-            music_item = None
-
-            for attempt in range(1, music_limit + 1):
-                message = await _discover_unprocessed(
-                    coordinator2.source,
+            try:
+                message1 = await _discover_unprocessed(
+                    coordinator1.source,
                     prod_conn,
-                    1,
+                    int(os.getenv("ARMORED_CERT_SOURCE_SCAN_LIMIT", "12")),
                 )
-                if message is None:
-                    break
+                if message1 is None:
+                    raise RuntimeError(
+                        "Source 1 não encontrou candidato novo dentro do limite"
+                    )
 
-                item_id, item = await _gate_one(
-                    coordinator2,
-                    coordinator2.source,
-                    message,
+                item_id1, item1 = await _gate_one(
+                    coordinator1,
+                    coordinator1.source,
+                    message1,
                 )
-                if item is None:
+                if item1 is None:
+                    raise RuntimeError(
+                        f"Source 1 encontrou WAITING_VISION no candidato {item_id1}; "
+                        "certificação exige candidato resolvido."
+                    )
+                print(
+                    f"[CERT][GATE] Source1 item={item_id1} "
+                    f"Vision->download confirmado; ORIGINAL={item1.original_path}"
+                )
+                await _process_and_verify(
+                    coordinator1,
+                    item_id1,
+                    str(route1.hub.chat_id),
+                    int(route1.hub.topic_id),
+                )
+            finally:
+                coordinator1.close()
+
+            print(
+                "\n[2/3] SOURCE 2 - procurar candidato real MUSIC_ONLY "
+                "sem baixar antes da Vision"
+            )
+            coordinator2 = _build_runtime(
+                temp_root / "source2",
+                reader,
+                route2.source.chat_id,
+                route2.source.source_id,
+                routes,
+            )
+
+            rvc_called: list[tuple[tuple, dict]] = []
+            original_rvc = rvc_module.converter_voz
+            original_run = unified_module.subprocess.run
+            captured_ffmpeg: list[list[str]] = []
+
+            def forbidden_rvc(*args, **kwargs):
+                rvc_called.append((args, kwargs))
+                raise AssertionError("RVC foi chamado para MUSIC_ONLY")
+
+            def capture_run(command, *args, **kwargs):
+                captured_ffmpeg.append([str(value) for value in command])
+                return original_run(command, *args, **kwargs)
+
+            rvc_module.converter_voz = forbidden_rvc
+            unified_module.subprocess.run = capture_run
+
+            try:
+                music_limit = int(
+                    os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "8")
+                )
+                music_item_id = None
+                music_item = None
+
+                for attempt in range(1, music_limit + 1):
+                    message = await _discover_unprocessed(
+                        coordinator2.source,
+                        prod_conn,
+                        1,
+                    )
+                    if message is None:
+                        break
+
+                    item_id, item = await _gate_one(
+                        coordinator2,
+                        coordinator2.source,
+                        message,
+                    )
+                    if item is None:
+                        print(
+                            f"[CERT][MUSIC] tentativa={attempt} item={item_id} "
+                            "Vision unresolved -> próxima candidata"
+                        )
+                        continue
+
+                    ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
+                    profile = analyze_audio(
+                        Path(item.original_path),
+                        ffmpeg=ffmpeg,
+                    )
                     print(
                         f"[CERT][MUSIC] tentativa={attempt} item={item_id} "
-                        "Vision unresolved -> descartada da busca"
+                        f"AudioKind={profile.kind.value}"
                     )
-                    continue
 
-                ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
-                profile = analyze_audio(Path(item.original_path), ffmpeg=ffmpeg)
+                    if profile.kind == AudioKind.MUSIC_ONLY:
+                        music_item_id = item_id
+                        music_item = item
+                        break
+
+                if music_item is None:
+                    raise RuntimeError(
+                        "Nenhum candidato MUSIC_ONLY encontrado dentro de "
+                        f"ARMORED_CERT_MUSIC_SCAN_LIMIT={music_limit}."
+                    )
+
                 print(
-                    f"[CERT][MUSIC] tentativa={attempt} item={item_id} "
-                    f"AudioKind={profile.kind.value}"
+                    f"[CERT][MUSIC] candidato escolhido={music_item_id}; "
+                    "executando Studio real + pipeline completo"
+                )
+                await _process_and_verify(
+                    coordinator2,
+                    music_item_id,
+                    str(route2.hub.chat_id),
+                    int(route2.hub.topic_id),
                 )
 
-                if profile.kind == AudioKind.MUSIC_ONLY:
-                    music_item_id = item_id
-                    music_item = item
-                    break
+                if rvc_called:
+                    raise AssertionError("RVC foi executado em MUSIC_ONLY")
 
-            if music_item is None:
-                raise RuntimeError(
-                    "Nenhum candidato MUSIC_ONLY encontrado dentro de "
-                    f"ARMORED_CERT_MUSIC_SCAN_LIMIT={music_limit}. "
-                    "Aumente o limite somente para a certificação."
+                extraction = captured_ffmpeg[0] if captured_ffmpeg else []
+                if "anullsrc=r=44100:cl=stereo" not in " ".join(extraction):
+                    raise AssertionError(
+                        "Studio não gerou silêncio para MUSIC_ONLY: "
+                        f"primeiro comando={extraction}"
+                    )
+                if str(music_item.original_path) in extraction:
+                    raise AssertionError(
+                        "Studio preservou o áudio original no comando de MUSIC_ONLY"
+                    )
+
+                print(
+                    "[CERT][MUSIC] PASS: MUSIC_ONLY -> sem RVC -> anullsrc -> "
+                    "áudio original não usado na extração -> Studio/Hub/Telegram OK"
                 )
+            finally:
+                rvc_module.converter_voz = original_rvc
+                unified_module.subprocess.run = original_run
+                coordinator2.close()
 
-            print(
-                f"[CERT][MUSIC] candidato escolhido={music_item_id}; "
-                "executando Studio real + pipeline completo"
-            )
-
-            await _process_and_verify(
-                coordinator2,
-                music_item_id,
-                str(route2.hub.chat_id),
-                int(route2.hub.topic_id),
-            )
-
-            if rvc_called:
-                raise AssertionError("RVC foi executado em MUSIC_ONLY")
-
-            extraction = captured_ffmpeg[0] if captured_ffmpeg else []
-            extraction_text = " ".join(extraction)
-            if "anullsrc=r=44100:cl=stereo" not in extraction:
-                raise AssertionError(
-                    "Studio não gerou silêncio para MUSIC_ONLY: "
-                    f"primeiro comando={extraction}"
-                )
-            if str(music_item.original_path) in extraction:
-                raise AssertionError(
-                    "Studio preservou o áudio original no comando de MUSIC_ONLY"
-                )
-
-            print(
-                "[CERT][MUSIC] PASS: MUSIC_ONLY -> sem RVC -> anullsrc -> "
-                "áudio original não usado na extração -> Studio/Hub/Telegram OK"
-            )
-        finally:
-            rvc_module.converter_voz = original_rvc
-            unified_module.subprocess.run = original_run
-            coordinator2.close()
-
-    if prod_conn is not None:
-        prod_conn.close()
+    finally:
+        if prod_conn is not None:
+            prod_conn.close()
 
     print("\n[3/3] CERTIFICAÇÃO")
     print("PASS: Vision antes de materialização para as duas fontes.")
@@ -439,7 +487,7 @@ def main() -> int:
         return 130
     except Exception as exc:
         print(f"\nRESULTADO: FAIL - {type(exc).__name__}: {exc}")
-        raise
+        return 1
 
 
 if __name__ == "__main__":
