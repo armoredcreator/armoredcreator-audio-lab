@@ -43,12 +43,8 @@ class Coordinator:
         if project_credentials.exists():
             load_dotenv(project_credentials, override=True)
 
-        # .env contains project configuration, not secrets. Keep externally
-        # supplied configuration compatible while preventing it from replacing
-        # the project credential source above.
-        project_config = storage.root / ".env"
-        if project_config.exists():
-            load_dotenv(project_config, override=False)
+        # credentials/project.env is the single project configuration source.
+        # Do not load .env or inherit a second project-local configuration file.
 
         db = Database(storage.database / "armoredcreator.db")
         if bindings is None:
