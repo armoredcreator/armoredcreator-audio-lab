@@ -602,7 +602,7 @@ class SyncLifecycleTests(unittest.TestCase):
                 coordinator.close()
 
 
-    def test_live_checkpoint_survives_processing_failure_without_startup_retry(self):
+    def test_live_checkpoint_survives_pre_download_vision_failure(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             storage = Storage(root)
@@ -622,29 +622,33 @@ class SyncLifecycleTests(unittest.TestCase):
                 db, storage, FailOnceVision(), Studio(storage), publisher, source
             )
 
-            # Processing failures are isolated by the continuous Coordinator:
-            # the item is durably RECOVERY, but the LIVE loop itself does not raise.
+            # Vision is now the pre-download gate: a technical failure leaves
+            # RECOVERY with no immutable ORIGINAL and must not download media.
             live = first.run_live_once()
             self.assertEqual(live, ["200"])
             self.assertEqual(db.get("200").state.value, "RECOVERY")
+            self.assertFalse(db.get("200").original_path.exists())
             first.close()
 
-            # RECOVERY is the durable retry state. Startup must resume the
-            # same unresolved candidate rather than abandoning it or consuming
-            # a later LIVE candidate.
+            # The source candidate remains available for the next LIVE poll.
+            # The second Coordinator retries the same Telegram candidate,
+            # Vision succeeds, and only then does materialization occur.
             restarted_source = LifecycleSource()
             restarted_source.completed = True
-            restarted_source.live = []
+            restarted_source.live = [SyncMessage(
+                "200", source_id="local", source_path=source_file,
+                original_url="https://shopee.com.br/x/restart",
+            )]
             second = Coordinator(
                 Database(storage.database / "db.sqlite"), storage,
                 Vision(), Studio(storage), publisher, restarted_source,
             )
-            recovered = second.recover_pending()
+            retried = second.run_live_once()
 
-            self.assertEqual(recovered, ["200"])
+            self.assertEqual(retried, ["200"])
             self.assertEqual(second.db.get("200").state.value, "PUBLISHED")
+            self.assertTrue(second.db.get("200").original_path.exists())
             self.assertEqual(publisher.published, ["200"])
-            self.assertEqual(restarted_source.live, [])
             second.close()
 
     def test_run_forever_catches_up_then_processes_one_live_candidate_per_cycle(self):
