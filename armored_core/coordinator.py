@@ -206,10 +206,12 @@ class Coordinator:
                 return item_id, False, current
 
             # stop_after_vision returns the accepted candidate to RECEIVED with
-            # durable Vision evidence. The normal pipeline resumes only after
-            # the ORIGINAL exists.
+            # durable Vision evidence. Materialize only now, after the gate.
             if not current.affiliate_url:
                 return item_id, False, current
+            if not current.original_path.is_file():
+                await self.sync.materialize_message_async(ingest)
+                return item_id, True, self.db.get(item_id)
             return item_id, True, current
         except Exception:
             # A technical Vision failure happens before the materialization
