@@ -30,8 +30,8 @@ class ArmoredHub:
 
     def _destination_for(self, item: Item) -> tuple[str, int]:
         record = self._publication(item)
-        if record is not None and record["destination_chat_id"] and record["destination_topic_id"] is not None:
-            return str(record["destination_chat_id"]), int(record["destination_topic_id"])
+        if self._publication_field(record, "destination_chat_id") and self._publication_field(record, "destination_topic_id") is not None:
+            return str(self._publication_field(record, "destination_chat_id")), int(self._publication_field(record, "destination_topic_id"))
         route = self._route_for(item)
         if route is not None:
             return str(route.hub.chat_id), int(route.hub.topic_id)
@@ -487,7 +487,7 @@ class ArmoredHub:
         record = self._publication(item)
         route = self._route_for(item)
         topic_id = str(
-            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            self._publication_field(record, "destination_topic_id")
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not message_id or not api_id or not api_hash or not topic_id:
@@ -585,7 +585,7 @@ class ArmoredHub:
         record = self._publication(item)
         route = self._route_for(item)
         topic_id = str(
-            record["destination_topic_id"] if record and record["destination_topic_id"] is not None
+            self._publication_field(record, "destination_topic_id")
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not token or not topic_id:
