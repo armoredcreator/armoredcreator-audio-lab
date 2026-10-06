@@ -322,8 +322,8 @@ class ArmoredHub:
 
         try:
             chat_id = (
-                str(record["destination_chat_id"])
-                if record and record["destination_chat_id"]
+                str(self._publication_field(record, "destination_chat_id"))
+                if record and self._publication_field(record, "destination_chat_id")
                 else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
             )
         except Exception as exc:
@@ -494,8 +494,8 @@ class ArmoredHub:
             return None
         try:
             chat_id = (
-                str(record["destination_chat_id"])
-                if record and record["destination_chat_id"]
+                str(self._publication_field(record, "destination_chat_id"))
+                if record and self._publication_field(record, "destination_chat_id")
                 else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
             )
         except Exception:
@@ -593,8 +593,8 @@ class ArmoredHub:
                 "Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN e ARMORED_HUB_TOPIC_ID"
             )
         chat_id = (
-            str(record["destination_chat_id"])
-            if record and record["destination_chat_id"]
+            str(self._publication_field(record, "destination_chat_id"))
+            if record and self._publication_field(record, "destination_chat_id")
             else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
         )
         width, height, duration = self._video_metadata(output)
