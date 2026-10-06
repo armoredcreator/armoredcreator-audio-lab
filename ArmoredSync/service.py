@@ -147,8 +147,8 @@ class TelegramSource:
         self.root = Path(root)
         self.reader = reader
         self.db = db
-        self.source = str(source).strip() if source is not None else None
-        self.source_id = str(source_id).strip() if source_id is not None else None
+        getattr(self, "source", None) = str(source).strip() if source is not None else None
+        getattr(self, "source_id", None) = str(source_id).strip() if source_id is not None else None
         self._seen: set[int] = set()
         self._topic_iterator = None
         self._topics: list[tuple[int, str]] | None = None
@@ -165,8 +165,8 @@ class TelegramSource:
     def mode(self) -> str:
         if self.db is None:
             return "LIVE" if self._historical_complete else "CATCH_UP"
-        if self.source_id:
-            return self.db.source_sync_mode(self.source_id)
+        if getattr(self, "source_id", None):
+            return self.db.source_sync_mode(getattr(self, "source_id", None))
         return self.db.sync_mode()
 
     @staticmethod
@@ -237,8 +237,8 @@ class TelegramSource:
 
     def mark_historical_complete(self) -> None:
         if self.db is not None:
-            if self.source_id:
-                self.db.complete_source_historical_sync(self.source_id)
+            if getattr(self, "source_id", None):
+                self.db.complete_source_historical_sync(getattr(self, "source_id", None))
             else:
                 self.db.complete_historical_sync()
         self._historical_complete = True
@@ -426,7 +426,7 @@ class TelegramSource:
         source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = getattr(self, "source_id", None) or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         if not self.reader.client.is_connected():
@@ -671,10 +671,10 @@ class TelegramSource:
         if self.is_historical_complete():
             return
 
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = getattr(self, "source_id", None) or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -714,10 +714,10 @@ class TelegramSource:
         if self.is_historical_complete():
             return [], {}
 
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = getattr(self, "source_id", None) or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -750,10 +750,10 @@ class TelegramSource:
 
     async def fetch_live_batch_async(self, limit: int | None = None) -> tuple[list[SyncMessage], dict[int, int]]:
         """Discover all new LIVE candidates, resolving grouped albums consistently."""
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = getattr(self, "source_id", None) or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -767,8 +767,8 @@ class TelegramSource:
             checkpoints: dict[int, int] = {}
             for topic_id, topic_name in self._topics:
                 checkpoint = (
-                    self.db.source_sync_topic_checkpoint(self.source_id, topic_id)
-                    if self.db is not None and self.source_id
+                    self.db.source_sync_topic_checkpoint(getattr(self, "source_id", None), topic_id)
+                    if self.db is not None and getattr(self, "source_id", None)
                     else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
                 )
                 messages = []
@@ -859,10 +859,10 @@ class TelegramSource:
         messages so one grouped album can be resolved as one content without
         sweeping the entire topic.
         """
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
-        source_id = self.source_id or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
+        source_id = getattr(self, "source_id", None) or (os.getenv("ARMORED_SYNC_SOURCE_ID") or source).strip()
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
 
         await self.reader.connect()
@@ -878,8 +878,8 @@ class TelegramSource:
             self._live_topic_index = (self._live_topic_index + 1) % len(self._topics)
 
             checkpoint = (
-                self.db.source_sync_topic_checkpoint(self.source_id, topic_id)
-                if self.db is not None and self.source_id
+                self.db.source_sync_topic_checkpoint(getattr(self, "source_id", None), topic_id)
+                if self.db is not None and getattr(self, "source_id", None)
                 else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
             )
 
@@ -1008,7 +1008,7 @@ class TelegramSource:
         old backlog from being reinterpreted as LIVE after a certification
         cutoff. Normal production CATCH-UP behavior is unchanged.
         """
-        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        source = getattr(self, "source", None) or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
         source_ref = int(source) if str(source).lstrip("-").isdigit() else source
@@ -1049,8 +1049,8 @@ class TelegramSource:
                 (name for tid, name in (self._topics or []) if tid == topic_id),
                 str(topic_id),
             )
-            if self.source_id:
-                self.db.set_source_sync_topic_checkpoint(self.source_id, topic_id, topic_name, message_id)
+            if getattr(self, "source_id", None):
+                self.db.set_source_sync_topic_checkpoint(getattr(self, "source_id", None), topic_id, topic_name, message_id)
             else:
                 self.db.set_sync_topic_checkpoint(topic_id, topic_name, message_id)
 
@@ -1217,10 +1217,10 @@ class ArmoredSync:
 
     def __init__(self, sync: SyncService, source: Any):
         self.sync = sync
-        self.source = source
+        getattr(self, "source", None) = source
 
     def fetch_next(self) -> SyncMessage | None:
-        value = self.source.fetch_next()
+        value = getattr(self, "source", None).fetch_next()
         if hasattr(value, "__await__"):
             value = asyncio.run(value)
         return value

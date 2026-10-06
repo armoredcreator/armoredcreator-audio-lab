@@ -22,6 +22,15 @@ class ArmoredHub:
         self.routes = tuple(routes)
         self._destination_chat_id: str | None = None
 
+    @staticmethod
+    def _record_value(record, key: str, default=None):
+        if record is None:
+            return default
+        try:
+            return record[key] if key in record.keys() else default
+        except AttributeError:
+            return record.get(key, default)
+
     def _route_for(self, item: Item):
         for route in self.routes:
             if str(route.source.source_id) == str(item.source_id):
@@ -30,7 +39,7 @@ class ArmoredHub:
 
     def _destination_for(self, item: Item) -> tuple[str, int]:
         record = self._publication(item)
-        if record is not None and record.get("destination_chat_id") and record.get("destination_topic_id") is not None:
+        if record is not None and self._record_value(record, "destination_chat_id") and self._record_value(record, "destination_topic_id") is not None:
             return str(record["destination_chat_id"]), int(record["destination_topic_id"])
         route = self._route_for(item)
         if route is not None:
@@ -128,13 +137,14 @@ class ArmoredHub:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
 
         existing = self._publication(item)
-        chat_id, topic_id = self._destination_for(item)
-        self.db.publication_started(
-            item.item_id,
-            destination_chat_id=chat_id,
-            destination_topic_id=topic_id,
-        )
-        check = PublicationCheck.ABSENT if existing is None else self.check_publication(item)
+        if existing is None:
+            # A fresh publication must not perform Telegram destination discovery
+            # before the idempotency record exists. The actual send boundary
+            # resolves the destination immediately before sending.
+            self.db.publication_started(item.item_id)
+            check = PublicationCheck.ABSENT
+        else:
+            check = self.check_publication(item)
 
         if check == PublicationCheck.CONFIRMED:
             record = self._publication(item)
@@ -305,7 +315,7 @@ class ArmoredHub:
         record = self._publication(item)
         route = self._route_for(item)
         topic_id = str(
-            record.get("destination_topic_id") if record and record.get("destination_topic_id") is not None
+            self._record_value(record, "destination_topic_id") if record and self._record_value(record, "destination_topic_id") is not None
             else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
         ).strip()
         if not api_id or not api_hash or not topic_id:
