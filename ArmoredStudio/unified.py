@@ -134,7 +134,7 @@ class UnifiedStudio:
         )
         audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
-        if audio_profile.kind is AudioKind.NO_AUDIO:
+        if audio_profile.kind in {AudioKind.NO_AUDIO, AudioKind.MUSIC_ONLY}:
             duration = float((analysis.video or {}).get("duracao", 0) or 0)
             duration = max(0.1, duration)
             subprocess.run(
