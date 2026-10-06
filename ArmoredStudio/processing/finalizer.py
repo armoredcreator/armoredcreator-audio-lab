@@ -50,11 +50,9 @@ def _windows_hidden_kwargs():
 def validar_arquivo(arquivo, descricao):
     arquivo = Path(arquivo)
     if not arquivo.exists():
-        raise FileNotFoundError(f"{descricao} não encontrado:
-{arquivo}")
+        raise FileNotFoundError(f"{descricao} não encontrado:\n{arquivo}")
     if arquivo.stat().st_size <= 0:
-        raise RuntimeError(f"{descricao} está vazio:
-{arquivo}")
+        raise RuntimeError(f"{descricao} está vazio:\n{arquivo}")
 
 
 def probe_video(video):
@@ -65,8 +63,7 @@ def probe_video(video):
                                text=True, encoding="utf-8", errors="replace",
                                **_windows_hidden_kwargs())
     if resultado.returncode != 0:
-        raise RuntimeError("Não foi possível obter a resolução/FPS do vídeo:
-" + resultado.stderr.strip())
+        raise RuntimeError("Não foi possível obter a resolução/FPS do vídeo:\n" + resultado.stderr.strip())
     streams = json.loads(resultado.stdout).get("streams") or []
     if not streams:
         raise RuntimeError("Vídeo sem stream de vídeo válido.")
