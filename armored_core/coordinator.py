@@ -210,13 +210,10 @@ class Coordinator:
             # retry the download inline. Leave RECEIVED without the original
             # so the recovery wrapper can perform its single same-run source
             # rediscovery through the durable checkpoint.
-            current = self.db.get(item_id)
-            if not current.affiliate_url:
-                try:
-                    if not current.original_path.is_file():
-                        await self.sync.materialize_message_async(ingest)
-                except Exception:
-                    pass
+            # Vision is now a hard pre-download gate. A technical Vision
+            # failure is durable RECOVERY, but it must never trigger a download
+            # merely to make Recovery possible. Recovery/source rediscovery will
+            # retry the candidate from Telegram without materializing media first.
             raise
         finally:
             # Sync must be released before Studio/Hub can use the same session.
@@ -622,18 +619,24 @@ class Coordinator:
             if not before:
                 return
 
-            # RECEIVED/VISION candidates without an immutable original cannot be
+            # Pre-download candidates without an immutable original cannot be
             # recovered from SQLite alone. They are durable reservations created by
-            # the Vision gate, so give each one its one source rediscovery attempt before generic Recovery
+            # the Vision gate (RECEIVED/VISION) or technical Vision failures (RECOVERY),
+            # so give each one its source rediscovery attempt before generic Recovery
             # can touch the remaining candidates. This is deliberately done after
             # the historical scan is exhausted: the source checkpoint must never
             # be reset while the current scan still has unseen candidates.
             source_rediscovery_missing = {
                 item_id
                 for item_id in before
-                if self.db.get(item_id).state in (State.RECEIVED, State.VISION)
-                and self.db.get(item_id).affiliate_url
-                and not self.db.get(item_id).original_path.is_file()
+                if not self.db.get(item_id).original_path.is_file()
+                and (
+                    self.db.get(item_id).state == State.RECOVERY
+                    or (
+                        self.db.get(item_id).state in (State.RECEIVED, State.VISION)
+                        and self.db.get(item_id).affiliate_url
+                    )
+                )
             }
             pending_rediscovery = source_rediscovery_missing - rediscovery_attempted
             if pending_rediscovery:
