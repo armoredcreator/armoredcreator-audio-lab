@@ -219,7 +219,7 @@ class VisionBeforeDownloadTests(unittest.TestCase):
                     return IngestMessage(
                         telegram_message_id="gate-rediscover",
                         source_id="telegram",
-                        topic_id=1,
+                        topic_id=None,
                         topic_name="topic",
                         original_url="https://shopee.com.br/product/123",
                         materialize=materialize,
