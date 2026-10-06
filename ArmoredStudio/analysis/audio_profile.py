@@ -40,7 +40,7 @@ def _classify(speech_ratio: float, rms_dbfs: float) -> AudioKind:
     if speech_ratio >= 0.08:
         # VAD is language-agnostic: English, Spanish, Portuguese, etc. are
         # all treated as narration/speech and can safely enter the RVC stage.
-        return AudioKind.SPEECH_PLUS_MUSIC if speech_ratio < 0.35 else AudioKind.SPEECH
+        return AudioKind.SPEECH if speech_ratio >= 0.15 else AudioKind.SPEECH_PLUS_MUSIC
     return AudioKind.MUSIC_ONLY
 
 
