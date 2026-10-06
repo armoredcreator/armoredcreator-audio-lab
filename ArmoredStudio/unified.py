@@ -15,6 +15,7 @@ from .analysis.banner_analyzer import analisar_banner
 from .analysis.banner import analisar_banner as analisar_corte_banner
 from .analysis.veo_detector import detect_fast as detectar_veo
 from .analysis.gemini_detector import detect_fast as detectar_gemini
+from .analysis.audio_profile import analyze_audio, AudioKind, intro_music_gain
 from .analysis.export_planner import criar_plano_exportacao
 from .analysis.export_plan_validator import validar_plano_exportacao
 
@@ -82,7 +83,7 @@ class UnifiedStudio:
         if not original.is_file():
             raise FileNotFoundError(original)
 
-        output = self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name)
+        output = self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)
         if output.exists():
             output.unlink()
 
@@ -125,7 +126,8 @@ class UnifiedStudio:
         # RVC voice stage. RVC is deliberately explicit: if the configured
         # environment/model is unavailable, the item fails instead of silently
         # downgrading production processing.
-        audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
+        audio_profile = analyze_audio(source, ffmpeg=ffmpeg)
+        logging.getLogger(__name__).info(\n            "[STUDIO][ITEM %s] AUDIO kind=%s speech=%.1f%% rms=%.1f dBFS intro_gain=%.2f",\n            item.content_id, audio_profile.kind.value, audio_profile.speech_ratio * 100,\n            audio_profile.rms_dbfs, intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present),\n        )\n        audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
         subprocess.run(
             [ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(audio_original)],
@@ -141,14 +143,14 @@ class UnifiedStudio:
             voice,
         )
         from .processing.rvc import converter_voz
-        converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)
+        if audio_profile.speech_present:\n            converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)\n        else:\n            shutil.copy2(audio_original, audio_rvc)
         logging.getLogger(__name__).info(
             "[STUDIO][ITEM %s] RVC concluído",
             item.content_id,
         )
 
         from .processing.finalizer import finalizar
-        finalizar(source, audio_rvc, music, banner, output, position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"), intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0", plan=analysis.plan)
+        finalizar(\n            source, audio_rvc, music, banner, output,\n            position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"),\n            intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0",\n            plan=analysis.plan,\n            audio_profile=audio_profile,\n        )
 
         for artifact in (audio_original, audio_rvc):
             artifact.unlink(missing_ok=True)

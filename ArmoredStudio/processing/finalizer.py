@@ -112,7 +112,7 @@ def _plan_dimensions(plan, width, height):
     return width, height
 
 
-def criar_filtro(position, largura, altura, fps, plan=None):
+def criar_filtro(position, largura, altura, fps, plan=None, intro_music_volume=INTRO_MUSIC_VOLUME):
     plan_video = _plan_video_filters(plan)
     base_video = plan_video + _story_normalization_filters(largura, altura) + [
         f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
@@ -147,7 +147,7 @@ def criar_filtro(position, largura, altura, fps, plan=None):
 
     audio_intro = (
         f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        f"loudnorm=I=-5:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
+        f"loudnorm=I=-5:LRA=7:TP=-1,volume={intro_music_volume:.3f},"
         f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
     )
     concat_order = "[intro_v][intro_a][main_v][main_a]" if position == "inicio" else "[main_v][main_a][intro_v][intro_a]"
@@ -155,7 +155,7 @@ def criar_filtro(position, largura, altura, fps, plan=None):
     return ";".join([visual, intro, audio_main, audio_intro, concat])
 
 
-def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None):
+def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None, audio_profile=None):
     video, voz, musica, banner, saida = map(Path, (video, voz, musica, banner, saida))
     validar_arquivo(video, "Vídeo")
     validar_arquivo(voz, "Áudio RVC")
@@ -173,7 +173,7 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
         saida.unlink()
 
     if intro:
-        filtro = criar_filtro(position, output_largura, output_altura, fps, plan)
+        intro_gain = INTRO_MUSIC_VOLUME\n        if audio_profile is not None:\n            try:\n                from ..analysis.audio_profile import intro_music_gain\n                intro_gain = intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present)\n            except Exception:\n                intro_gain = INTRO_MUSIC_VOLUME\n        filtro = criar_filtro(position, output_largura, output_altura, fps, plan, intro_music_volume=intro_gain)
         maps = ("[vout]", "[aout]")
     else:
         vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [
