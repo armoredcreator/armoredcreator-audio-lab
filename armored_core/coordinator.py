@@ -628,13 +628,14 @@ class Coordinator:
             # can touch the remaining candidates. This is deliberately done after
             # the historical scan is exhausted: the source checkpoint must never
             # be reset while the current scan still has unseen candidates.
-            received_missing = {
+            source_rediscovery_missing = {
                 item_id
                 for item_id in before
-                if self.db.get(item_id).state == State.RECEIVED
+                if self.db.get(item_id).state in (State.RECEIVED, State.VISION)
+                and self.db.get(item_id).affiliate_url
                 and not self.db.get(item_id).original_path.is_file()
             }
-            pending_rediscovery = received_missing - rediscovery_attempted
+            pending_rediscovery = source_rediscovery_missing - rediscovery_attempted
             if pending_rediscovery:
                 rediscovery_attempted.update(pending_rediscovery)
                 reset = getattr(self.source, "reset_historical_scan", None)
@@ -648,8 +649,8 @@ class Coordinator:
             after = set()
             for row in self.db.conn.execute(
                 "SELECT content_id, state FROM items "
-                "WHERE state IN (?, ?) ORDER BY created_at, content_id",
-                (State.RECOVERY.value, State.RECEIVED.value),
+                "WHERE state IN (?, ?, ?) ORDER BY created_at, content_id",
+                (State.RECOVERY.value, State.RECEIVED.value, State.VISION.value),
             ).fetchall():
                 item = self.db.get(str(row["content_id"]))
                 if (
