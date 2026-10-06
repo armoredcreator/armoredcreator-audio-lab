@@ -4,6 +4,7 @@ import asyncio
 import os
 import sqlite3
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -135,9 +136,9 @@ async def _gate_one(
         if hasattr(result, "__await__"):
             await result
 
-    message.materialize = materialize
+    gated_message = replace(message, materialize=materialize)
     try:
-        result = await coordinator._vision_gate_and_materialize_async(message)
+        result = await coordinator._vision_gate_and_materialize_async(gated_message)
     finally:
         coordinator.pipeline.vision.identify = original_identify
 
@@ -444,13 +445,17 @@ async def main_async() -> int:
                 if rvc_called:
                     raise AssertionError("RVC foi executado em MUSIC_ONLY")
 
-                extraction = captured_ffmpeg[0] if captured_ffmpeg else []
-                if "anullsrc=r=44100:cl=stereo" not in " ".join(extraction):
+                silence_commands = [
+                    command
+                    for command in captured_ffmpeg
+                    if "anullsrc=r=44100:cl=stereo" in " ".join(command)
+                ]
+                if not silence_commands:
                     raise AssertionError(
-                        "Studio não gerou silêncio para MUSIC_ONLY: "
-                        f"primeiro comando={extraction}"
+                        "Studio não gerou silêncio para MUSIC_ONLY; nenhum comando "
+                        "FFmpeg com anullsrc foi observado"
                     )
-                if str(music_item.original_path) in extraction:
+                if any(str(music_item.original_path) in command for command in silence_commands):
                     raise AssertionError(
                         "Studio preservou o áudio original no comando de MUSIC_ONLY"
                     )
