@@ -7,6 +7,7 @@ from ArmoredHub.service import ArmoredHub
 from ArmoredSync.service import MultiTelegramSource, TelegramSource
 from armored_core.database import Database
 from armored_core.routing import load_routes
+from armored_core.storage import Storage
 
 
 def _routes(monkeypatch):
@@ -175,3 +176,13 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
     assert db.source_sync_topic_checkpoint("-1003788989075", 228) == 900
     assert db.source_sync_topic_checkpoint("-1002698134896", 228) == 0
 
+
+
+def test_source_media_workspaces_are_physically_isolated(tmp_path: Path):
+    storage = Storage(tmp_path)
+    source1 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1003788989075")
+    source2 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1002698134896")
+
+    assert source1 != source2
+    assert source1 == tmp_path / "storage" / "sources" / "-1003788989075" / "videos" / "77" / "77_1.mp4"
+    assert source2 == tmp_path / "storage" / "sources" / "-1002698134896" / "videos" / "77" / "77_1.mp4"
