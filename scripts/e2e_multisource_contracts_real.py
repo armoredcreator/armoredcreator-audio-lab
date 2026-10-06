@@ -418,7 +418,7 @@ async def main_async() -> int:
                 coordinator1.close()
 
             print(
-                "\n[2/3] SOURCE 2 - procurar candidato real MUSIC_ONLY "
+                "\n[2/3] SOURCE 2 - procurar candidato real SEM NARRAÇÃO "
                 "sem baixar antes da Vision"
             )
             coordinator2 = _build_runtime(
@@ -436,7 +436,7 @@ async def main_async() -> int:
 
             def forbidden_rvc(*args, **kwargs):
                 rvc_called.append((args, kwargs))
-                raise AssertionError("RVC foi chamado para MUSIC_ONLY")
+                raise AssertionError("RVC foi chamado para vídeo sem narração")
 
             def capture_run(command, *args, **kwargs):
                 captured_ffmpeg.append([str(value) for value in command])
@@ -449,8 +449,8 @@ async def main_async() -> int:
                 music_limit = int(
                     os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "8")
                 )
-                music_item_id = None
-                music_item = None
+                nonspeech_item_id = None
+                nonspeech_item = None
 
                 for attempt in range(1, music_limit + 1):
                     message = await _discover_unprocessed(
@@ -483,14 +483,14 @@ async def main_async() -> int:
                         f"AudioKind={profile.kind.value}"
                     )
 
-                    if profile.kind == AudioKind.MUSIC_ONLY:
-                        music_item_id = item_id
-                        music_item = item
+                    if not profile.speech_present:
+                        nonspeech_item_id = item_id
+                        nonspeech_item = item
                         break
 
-                if music_item is None:
+                if nonspeech_item is None:
                     raise RuntimeError(
-                        "Nenhum candidato MUSIC_ONLY encontrado dentro de "
+                        "Nenhum candidato sem narração encontrado dentro de "
                         f"ARMORED_CERT_MUSIC_SCAN_LIMIT={music_limit}."
                     )
 
@@ -500,7 +500,7 @@ async def main_async() -> int:
                 )
                 await _process_and_verify(
                     coordinator2,
-                    music_item_id,
+                    nonspeech_item_id,
                     str(route2.hub.chat_id),
                     int(route2.hub.topic_id),
                 )
@@ -515,12 +515,12 @@ async def main_async() -> int:
                 ]
                 if not silence_commands:
                     raise AssertionError(
-                        "Studio não gerou silêncio para MUSIC_ONLY; nenhum comando "
+                        "Studio não gerou silêncio para vídeo sem narração; nenhum comando "
                         "FFmpeg com anullsrc foi observado"
                     )
                 if any(str(nonspeech_item.original_path) in command for command in silence_commands):
                     raise AssertionError(
-                        "Studio preservou o áudio original no comando de MUSIC_ONLY"
+                        "Studio preservou o áudio original no comando sem narração"
                     )
 
                 print(
@@ -541,7 +541,7 @@ async def main_async() -> int:
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
     print("PASS: Source 1 publicado e confirmado no tópico 228.")
     print("PASS: Source 2 sem narração publicado e confirmado no tópico 1160.")
-    print("PASS: MUSIC_ONLY não chamou RVC e mutou o áudio original.")
+    print("PASS: vídeo sem narração não chamou RVC e mutou o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
     return 0
