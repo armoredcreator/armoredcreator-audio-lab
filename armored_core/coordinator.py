@@ -15,6 +15,7 @@ from .recovery import Recovery
 from .services import IngestMessage, SyncService
 from .startup_audit import StartupReconciler
 from .storage import Storage
+from .routing import load_routes
 
 
 class Coordinator:
@@ -56,19 +57,33 @@ class Coordinator:
             from ArmoredStudio.service import ArmoredStudio
             from ArmoredVision.service import ArmoredVision
             from ArmoredIA.service import ArmoredIA
-            from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource
+            from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
 
             vision = ArmoredVision()
             ia = ArmoredIA()
             studio = ArmoredStudio(storage.root)
-            publisher = ArmoredHub(storage.root, db)
+            routes = load_routes()
+            legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+            for route in routes:
+                db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
+            publisher = ArmoredHub(storage.root, db, routes=routes)
             if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
                 api_id = os.getenv("TELEGRAM_API_ID")
                 api_hash = os.getenv("TELEGRAM_API_HASH")
                 if not api_id or not api_hash:
                     raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH são obrigatórios")
                 reader = TelegramReader(storage.root, int(api_id), api_hash)
-                source = TelegramSource(storage.root, reader, db)
+                source = (
+                    MultiTelegramSource(storage.root, reader, db, routes)
+                    if len(routes) > 1
+                    else TelegramSource(
+                        storage.root,
+                        reader,
+                        db,
+                        source=(routes[0].source.chat_id if routes else None),
+                        source_id=(routes[0].source.source_id if routes else None),
+                    )
+                )
             else:
                 source = LocalSource(storage.root / "input")
             return cls(db, storage, vision, studio, publisher, source, ia)
