@@ -771,7 +771,11 @@ class Coordinator:
                         "[COORDINATOR][CERT] CATCH-UP limitado concluído; "
                         "cutover histórico seguro executado; entrando em LIVE"
                     )
-                    source_complete = self.source.is_historical_complete()
+                    source_complete = (
+                        self.source.is_historical_complete()
+                        if self.source is not None and hasattr(self.source, "is_historical_complete")
+                        else self.db.historical_complete()
+                    )
 
                 if not source_complete:
                     import logging
