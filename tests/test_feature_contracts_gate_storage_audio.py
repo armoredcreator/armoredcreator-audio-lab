@@ -292,10 +292,31 @@ def test_no_audio_studio_uses_same_no_speech_audio_path(tmp_path, monkeypatch):
     assert captured["profile"].kind == unified_module.AudioKind.NO_AUDIO
 
 
-def test_finalizer_keeps_canonical_intro_and_effect_gains():
-    from ArmoredStudio.processing.finalizer import criar_filtro, INTRO_MUSIC_VOLUME, MUSIC_VOLUME
+def test_finalizer_uses_low_main_effect_for_narration_and_high_for_no_speech():
+    from ArmoredStudio.processing.finalizer import (
+        criar_filtro,
+        INTRO_MUSIC_VOLUME,
+        MUSIC_VOLUME,
+    )
 
-    filtro = criar_filtro("final", 1080, 1920, "30/1", plan={})
+    class Speech:
+        speech_present = True
 
-    assert f"volume={MUSIC_VOLUME:.3f}[music]" in filtro
-    assert f"volume={INTRO_MUSIC_VOLUME:.3f}," in filtro
+    class NoSpeech:
+        speech_present = False
+
+    speech_filter = criar_filtro(
+        "final", 1080, 1920, "30/1", plan={},
+        intro_music_volume=INTRO_MUSIC_VOLUME,
+        main_music_volume=MUSIC_VOLUME,
+    )
+    no_speech_filter = criar_filtro(
+        "final", 1080, 1920, "30/1", plan={},
+        intro_music_volume=INTRO_MUSIC_VOLUME,
+        main_music_volume=INTRO_MUSIC_VOLUME,
+    )
+
+    assert f"volume={MUSIC_VOLUME:.3f}[music]" in speech_filter
+    assert f"volume={INTRO_MUSIC_VOLUME:.3f}," in speech_filter
+    assert f"volume={INTRO_MUSIC_VOLUME:.3f}[music]" in no_speech_filter
+    assert f"volume={INTRO_MUSIC_VOLUME:.3f}," in no_speech_filter
