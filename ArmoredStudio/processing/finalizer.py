@@ -50,9 +50,11 @@ def _windows_hidden_kwargs():
 def validar_arquivo(arquivo, descricao):
     arquivo = Path(arquivo)
     if not arquivo.exists():
-        raise FileNotFoundError(f"{descricao} não encontrado:\n{arquivo}")
+        raise FileNotFoundError(f"{descricao} não encontrado:
+{arquivo}")
     if arquivo.stat().st_size <= 0:
-        raise RuntimeError(f"{descricao} está vazio:\n{arquivo}")
+        raise RuntimeError(f"{descricao} está vazio:
+{arquivo}")
 
 
 def probe_video(video):
@@ -63,7 +65,8 @@ def probe_video(video):
                                text=True, encoding="utf-8", errors="replace",
                                **_windows_hidden_kwargs())
     if resultado.returncode != 0:
-        raise RuntimeError("Não foi possível obter a resolução/FPS do vídeo:\n" + resultado.stderr.strip())
+        raise RuntimeError("Não foi possível obter a resolução/FPS do vídeo:
+" + resultado.stderr.strip())
     streams = json.loads(resultado.stdout).get("streams") or []
     if not streams:
         raise RuntimeError("Vídeo sem stream de vídeo válido.")
@@ -112,7 +115,7 @@ def _plan_dimensions(plan, width, height):
     return width, height
 
 
-def criar_filtro(position, largura, altura, fps, plan=None, intro_music_volume=INTRO_MUSIC_VOLUME):
+def criar_filtro(position, largura, altura, fps, plan=None, intro_music_volume=INTRO_MUSIC_VOLUME, main_music_volume=MUSIC_VOLUME):
     plan_video = _plan_video_filters(plan)
     base_video = plan_video + _story_normalization_filters(largura, altura) + [
         f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
@@ -141,7 +144,7 @@ def criar_filtro(position, largura, altura, fps, plan=None, intro_music_volume=I
         audio_main += ",".join(audio_filters) + ","
     audio_main += (
         f"volume={VOICE_VOLUME}[voice];"
-        f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
+        f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={main_music_volume:.3f}[music];"
         "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
     )
 
@@ -173,7 +176,16 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
         saida.unlink()
 
     if intro:
-        intro_gain = INTRO_MUSIC_VOLUME\n        if audio_profile is not None:\n            try:\n                from ..analysis.audio_profile import intro_music_gain\n                intro_gain = intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present)\n            except Exception:\n                intro_gain = INTRO_MUSIC_VOLUME\n        filtro = criar_filtro(position, output_largura, output_altura, fps, plan, intro_music_volume=intro_gain)
+        intro_gain = INTRO_MUSIC_VOLUME
+        main_music_gain = MUSIC_VOLUME
+        if audio_profile is not None:
+            try:
+                from ..analysis.audio_profile import intro_music_gain
+                intro_gain = intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present)
+                main_music_gain = 0.8 if audio_profile.speech_present else 0.25
+            except Exception:
+                intro_gain = INTRO_MUSIC_VOLUME
+        filtro = criar_filtro(position, output_largura, output_altura, fps, plan, intro_music_volume=intro_gain, main_music_volume=main_music_gain)
         maps = ("[vout]", "[aout]")
     else:
         vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [

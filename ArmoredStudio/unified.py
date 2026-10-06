@@ -127,7 +127,12 @@ class UnifiedStudio:
         # environment/model is unavailable, the item fails instead of silently
         # downgrading production processing.
         audio_profile = analyze_audio(source, ffmpeg=ffmpeg)
-        logging.getLogger(__name__).info(\n            "[STUDIO][ITEM %s] AUDIO kind=%s speech=%.1f%% rms=%.1f dBFS intro_gain=%.2f",\n            item.content_id, audio_profile.kind.value, audio_profile.speech_ratio * 100,\n            audio_profile.rms_dbfs, intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present),\n        )\n        audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
+        logging.getLogger(__name__).info(
+            "[STUDIO][ITEM %s] AUDIO kind=%s speech=%.1f%% rms=%.1f dBFS intro_gain=%.2f",
+            item.content_id, audio_profile.kind.value, audio_profile.speech_ratio * 100,
+            audio_profile.rms_dbfs, intro_music_gain(audio_profile.rms_dbfs, audio_profile.speech_present),
+        )
+        audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
         subprocess.run(
             [ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(audio_original)],
@@ -143,14 +148,23 @@ class UnifiedStudio:
             voice,
         )
         from .processing.rvc import converter_voz
-        if audio_profile.speech_present:\n            converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)\n        else:\n            shutil.copy2(audio_original, audio_rvc)
+        if audio_profile.speech_present:
+            converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)
+        else:
+            shutil.copy2(audio_original, audio_rvc)
         logging.getLogger(__name__).info(
             "[STUDIO][ITEM %s] RVC concluído",
             item.content_id,
         )
 
         from .processing.finalizer import finalizar
-        finalizar(\n            source, audio_rvc, music, banner, output,\n            position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"),\n            intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0",\n            plan=analysis.plan,\n            audio_profile=audio_profile,\n        )
+        finalizar(
+            source, audio_rvc, music, banner, output,
+            position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"),
+            intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0",
+            plan=analysis.plan,
+            audio_profile=audio_profile,
+        )
 
         for artifact in (audio_original, audio_rvc):
             artifact.unlink(missing_ok=True)
