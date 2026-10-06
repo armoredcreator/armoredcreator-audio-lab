@@ -4,12 +4,10 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from armored_core.coordinator import Coordinator
 from armored_core.database import Database
 from armored_core.models import State
-from armored_core.services import IngestMessage, VisionResult, VisionUnresolvedError
+from armored_core.services import VisionResult, VisionUnresolvedError
 from armored_core.storage import Storage
 
 
@@ -79,8 +77,10 @@ def test_vision_gate_runs_before_any_materialization(tmp_path, monkeypatch):
     async def materialize(target: Path):
         events.append("download")
         assert events == ["vision", "download"]
-        assert "Videos GRUPO_FONTE_1" in str(target)
-        assert target.parent == storage.storage / "Videos GRUPO_FONTE_1" / "77"
+        expected_workspace = (
+            storage.storage / "Videos GRUPO_FONTE_1" / "-1003788989075_77"
+        )
+        assert target.parent == expected_workspace
         target.write_bytes(b"telegram-video")
 
     message = SimpleNamespace(
@@ -103,7 +103,10 @@ def test_vision_gate_runs_before_any_materialization(tmp_path, monkeypatch):
     assert item.state == State.RECEIVED
     assert item.affiliate_url == "https://shopee.com.br/product/123"
     assert item.original_path == (
-        storage.storage / "Videos GRUPO_FONTE_1" / "77" / "77_123.mp4"
+        storage.storage
+        / "Videos GRUPO_FONTE_1"
+        / "-1003788989075_77"
+        / "-1003788989075_77_123.mp4"
     )
     assert item.original_path.is_file()
     assert not (storage.storage / "sources").exists()
