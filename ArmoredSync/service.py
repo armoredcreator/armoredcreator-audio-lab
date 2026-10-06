@@ -147,8 +147,8 @@ class TelegramSource:
         self.root = Path(root)
         self.reader = reader
         self.db = db
-        getattr(self, "source", None) = str(source).strip() if source is not None else None
-        getattr(self, "source_id", None) = str(source_id).strip() if source_id is not None else None
+        self.source = str(source).strip() if source is not None else None
+        self.source_id = str(source_id).strip() if source_id is not None else None
         self._seen: set[int] = set()
         self._topic_iterator = None
         self._topics: list[tuple[int, str]] | None = None
@@ -1217,10 +1217,10 @@ class ArmoredSync:
 
     def __init__(self, sync: SyncService, source: Any):
         self.sync = sync
-        getattr(self, "source", None) = source
+        self.source = source
 
     def fetch_next(self) -> SyncMessage | None:
-        value = getattr(self, "source", None).fetch_next()
+        value = self.source.fetch_next()
         if hasattr(value, "__await__"):
             value = asyncio.run(value)
         return value
