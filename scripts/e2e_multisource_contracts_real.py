@@ -347,12 +347,73 @@ async def main_async() -> int:
                     f"[CERT][GATE] Source1 item={item_id1} "
                     f"Vision->download confirmado; ORIGINAL={item1.original_path}"
                 )
-                await _process_and_verify(
-                    coordinator1,
-                    item_id1,
-                    str(route1.hub.chat_id),
-                    int(route1.hub.topic_id),
+
+                # Audio classification is a global Studio contract: every
+                # source must pass through narration/music/no-audio detection.
+                ffmpeg1 = os.getenv("ARMORED_FFMPEG", "ffmpeg")
+                profile1 = analyze_audio(Path(item1.original_path), ffmpeg=ffmpeg1)
+                print(
+                    f"[CERT][AUDIO][SOURCE1] item={item_id1} "
+                    f"AudioKind={profile1.kind.value} "
+                    f"speech_present={profile1.speech_present}"
                 )
+
+                rvc_calls1 = []
+                original_rvc1 = rvc_module.converter_voz
+                original_run1 = unified_module.subprocess.run
+                commands1 = []
+
+                def recording_rvc1(*args, **kwargs):
+                    rvc_calls1.append((args, kwargs))
+                    return original_rvc1(*args, **kwargs)
+
+                def recording_run1(command, *args, **kwargs):
+                    commands1.append([str(value) for value in command])
+                    return original_run1(command, *args, **kwargs)
+
+                rvc_module.converter_voz = recording_rvc1
+                unified_module.subprocess.run = recording_run1
+                try:
+                    await _process_and_verify(
+                        coordinator1,
+                        item_id1,
+                        str(route1.hub.chat_id),
+                        int(route1.hub.topic_id),
+                    )
+                finally:
+                    rvc_module.converter_voz = original_rvc1
+                    unified_module.subprocess.run = original_run1
+
+                if profile1.speech_present:
+                    if not rvc_calls1:
+                        raise AssertionError(
+                            "Source1 tem narração/voz, mas RVC não foi executado"
+                        )
+                    print("[CERT][AUDIO][SOURCE1] PASS: fala detectada -> RVC executado")
+                else:
+                    if rvc_calls1:
+                        raise AssertionError(
+                            "Source1 não tem narração, mas RVC foi executado"
+                        )
+                    silence_commands1 = [
+                        command for command in commands1
+                        if "anullsrc=r=44100:cl=stereo" in " ".join(command)
+                    ]
+                    if not silence_commands1:
+                        raise AssertionError(
+                            "Source1 sem narração não passou pelo caminho de silêncio"
+                        )
+                    if any(
+                        str(item1.original_path) in command
+                        for command in silence_commands1
+                    ):
+                        raise AssertionError(
+                            "Source1 sem narração preservou o áudio original"
+                        )
+                    print(
+                        "[CERT][AUDIO][SOURCE1] PASS: sem narração -> "
+                        "sem RVC -> áudio original mutado"
+                    )
             finally:
                 coordinator1.close()
 
