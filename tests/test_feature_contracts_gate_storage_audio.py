@@ -224,3 +224,69 @@ def test_music_only_studio_mutes_original_audio_and_skips_rvc(tmp_path, monkeypa
     assert str(source) not in commands[0]
     assert captured["voice_bytes"] == b"SILENCE"
     assert captured["profile"].kind == unified_module.AudioKind.MUSIC_ONLY
+
+
+def test_no_audio_studio_uses_same_no_speech_audio_path(tmp_path, monkeypatch):
+    import ArmoredStudio.processing.finalizer as finalizer_module
+    import ArmoredStudio.processing.rvc as rvc_module
+    import ArmoredStudio.unified as unified_module
+
+    storage = Storage(tmp_path)
+    source = storage.storage / "Videos GRUPO_FONTE_1" / "99" / "99_original.mp4"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"video")
+    music = tmp_path / "music.wav"
+    banner = tmp_path / "banner.png"
+    music.write_bytes(b"music")
+    banner.write_bytes(b"banner")
+
+    item = SimpleNamespace(
+        content_id="99", telegram_message_id="99", source_id="-1003788989075",
+        original_path=source, working_path=None,
+        affiliate_url="https://shopee.com.br/product/99", affiliate_name="produto",
+    )
+
+    class _Analysis:
+        def analyze(self, _source):
+            return SimpleNamespace(video={"duracao": 2.0}, plan={"ok": True})
+
+    class _Profile:
+        kind = unified_module.AudioKind.NO_AUDIO
+        speech_present = False
+        speech_ratio = 0.0
+        rms_dbfs = -120.0
+
+    commands = []
+    rvc_called = []
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"SILENCE")
+        return SimpleNamespace(returncode=0)
+
+    def fail_rvc(*args, **kwargs):
+        rvc_called.append((args, kwargs))
+        raise AssertionError("RVC não pode ser executado para NO_AUDIO")
+
+    def fake_finalize(*args, **kwargs):
+        captured["profile"] = kwargs["audio_profile"]
+        Path(args[4]).write_bytes(b"result")
+
+    monkeypatch.setenv("ARMORED_STUDIO_MUSIC", str(music))
+    monkeypatch.setenv("ARMORED_STUDIO_BANNER", str(banner))
+    monkeypatch.setenv("ARMORED_FFMPEG", "ffmpeg")
+    monkeypatch.setattr(unified_module, "analyze_audio", lambda *args, **kwargs: _Profile())
+    monkeypatch.setattr(unified_module.shutil, "which", lambda _: "ffmpeg")
+    monkeypatch.setattr(unified_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(rvc_module, "converter_voz", fail_rvc)
+    monkeypatch.setattr(finalizer_module, "finalizar", fake_finalize)
+
+    studio = unified_module.UnifiedStudio(tmp_path, storage, analysis=_Analysis())
+    output, _ = studio.process(item)
+
+    assert output.is_file()
+    assert not rvc_called
+    assert any("anullsrc=r=44100:cl=stereo" in " ".join(cmd) for cmd in commands)
+    assert not any(str(source) in cmd for cmd in commands if "anullsrc=r=44100:cl=stereo" in " ".join(cmd))
+    assert captured["profile"].kind == unified_module.AudioKind.NO_AUDIO
