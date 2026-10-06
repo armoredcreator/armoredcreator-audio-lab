@@ -446,13 +446,21 @@ async def main_async() -> int:
             unified_module.subprocess.run = capture_run
 
             try:
-                music_limit = int(
-                    os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "8")
+                audio_limit = int(
+                    os.getenv(
+                        "ARMORED_CERT_AUDIO_SCAN_LIMIT",
+                        os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "12"),
+                    )
                 )
-                nonspeech_item_id = None
-                nonspeech_item = None
+                targets = {
+                    AudioKind.MUSIC_ONLY: None,
+                    AudioKind.NO_AUDIO: None,
+                }
 
-                for attempt in range(1, music_limit + 1):
+                for attempt in range(1, audio_limit + 1):
+                    if all(targets.values()):
+                        break
+
                     message = await _discover_unprocessed(
                         coordinator2.source,
                         prod_conn,
@@ -468,7 +476,7 @@ async def main_async() -> int:
                     )
                     if item is None:
                         print(
-                            f"[CERT][MUSIC] tentativa={attempt} item={item_id} "
+                            f"[CERT][AUDIO-SCAN] tentativa={attempt} item={item_id} "
                             "Vision unresolved -> próxima candidata"
                         )
                         continue
@@ -479,54 +487,65 @@ async def main_async() -> int:
                         ffmpeg=ffmpeg,
                     )
                     print(
-                        f"[CERT][MUSIC] tentativa={attempt} item={item_id} "
-                        f"AudioKind={profile.kind.value}"
+                        f"[CERT][AUDIO-SCAN] tentativa={attempt} item={item_id} "
+                        f"AudioKind={profile.kind.value} "
+                        f"speech_present={profile.speech_present}"
                     )
 
-                    if not profile.speech_present:
-                        nonspeech_item_id = item_id
-                        nonspeech_item = item
-                        break
+                    if profile.kind in targets and targets[profile.kind] is None:
+                        targets[profile.kind] = (item_id, item, profile)
 
-                if nonspeech_item is None:
+                missing = [kind.value for kind, value in targets.items() if value is None]
+                if missing:
                     raise RuntimeError(
-                        "Nenhum candidato sem narração encontrado dentro de "
-                        f"ARMORED_CERT_MUSIC_SCAN_LIMIT={music_limit}."
+                        "A certificação real não encontrou todos os tipos de áudio "
+                        f"dentro de ARMORED_CERT_AUDIO_SCAN_LIMIT={audio_limit}: "
+                        + ", ".join(missing)
                     )
 
-                print(
-                    f"[CERT][MUSIC] candidato escolhido={nonspeech_item_id} "
-                    "executando Studio real + pipeline completo"
-                )
-                await _process_and_verify(
-                    coordinator2,
-                    nonspeech_item_id,
-                    str(route2.hub.chat_id),
-                    int(route2.hub.topic_id),
-                )
-
-                if rvc_called:
-                    raise AssertionError("RVC foi executado em MUSIC_ONLY")
-
-                silence_commands = [
-                    command
-                    for command in captured_ffmpeg
-                    if "anullsrc=r=44100:cl=stereo" in " ".join(command)
-                ]
-                if not silence_commands:
-                    raise AssertionError(
-                        "Studio não gerou silêncio para vídeo sem narração; nenhum comando "
-                        "FFmpeg com anullsrc foi observado"
+                for kind in (AudioKind.MUSIC_ONLY, AudioKind.NO_AUDIO):
+                    item_id, item, profile = targets[kind]
+                    print(
+                        f"[CERT][AUDIO] candidato {kind.value} escolhido={item_id} "
+                        "-> Studio real + pipeline completo"
                     )
-                if any(str(nonspeech_item.original_path) in command for command in silence_commands):
-                    raise AssertionError(
-                        "Studio preservou o áudio original no comando sem narração"
+                    before_commands = len(captured_ffmpeg)
+                    await _process_and_verify(
+                        coordinator2,
+                        item_id,
+                        str(route2.hub.chat_id),
+                        int(route2.hub.topic_id),
                     )
 
-                print(
-                    "[CERT][AUDIO] PASS: vídeo sem narração -> sem RVC -> anullsrc -> "
-                    "áudio original não usado na extração -> Studio/Hub/Telegram OK"
-                )
+                    if rvc_called:
+                        raise AssertionError(
+                            f"RVC foi executado para candidato {kind.value}"
+                        )
+
+                    silence_commands = [
+                        command
+                        for command in captured_ffmpeg[before_commands:]
+                        if "anullsrc=r=44100:cl=stereo" in " ".join(command)
+                    ]
+                    if not silence_commands:
+                        raise AssertionError(
+                            f"Studio não gerou silêncio para {kind.value}; "
+                            "nenhum comando FFmpeg com anullsrc foi observado"
+                        )
+                    if any(
+                        str(item.original_path) in command
+                        for command in silence_commands
+                    ):
+                        raise AssertionError(
+                            f"Studio preservou o áudio original no caminho {kind.value}"
+                        )
+
+                    print(
+                        f"[CERT][AUDIO] PASS: {kind.value} -> sem RVC -> "
+                        "anullsrc -> áudio original não usado -> "
+                        "Studio/Hub/Telegram OK"
+                    )
+
             finally:
                 rvc_module.converter_voz = original_rvc
                 unified_module.subprocess.run = original_run
