@@ -302,15 +302,15 @@ storage/
 ├── videos/
 │   └── ... legado/compatibilidade
 ├── Videos GRUPO_FONTE_1/
-│   └── <content_id>/
-│       ├── <content_id>_<produto>.mp4
-│       ├── <content_id>_.mp4
-│       └── <content_id>_<resultado>.mp4
+│   └── <telegram_message_id>/
+│       ├── <telegram_message_id>_<produto>.mp4
+│       ├── <telegram_message_id>_.mp4
+│       └── <telegram_message_id>_<resultado>.mp4
 └── Videos GRUPO_FONTE_2/
-    └── <content_id>/
-        ├── <content_id>_<produto>.mp4
-        ├── <content_id>_.mp4
-        └── <content_id>_<resultado>.mp4
+    └── <telegram_message_id>/
+        ├── <telegram_message_id>_<produto>.mp4
+        ├── <telegram_message_id>_.mp4
+        └── <telegram_message_id>_<resultado>.mp4
 ```
 
 **Não existe:**
@@ -320,6 +320,8 @@ storage/sources/
 ```
 
 A Fonte 2 é isolada diretamente por uma pasta de primeiro nível, conforme o padrão definido para o Lab.
+
+**Importante:** o `content_id` do SQLite continua podendo ser escopado por `source_id` (por exemplo, `-1002698134896_77`) para impedir colisões entre fontes. Isso é separado do identificador físico do workspace: em cada pasta de fonte, o filesystem segue o padrão da Fonte 1 usando o próprio `telegram_message_id` (`77/`, `77_*.mp4`).
 
 ## 5.2 API de Storage
 
