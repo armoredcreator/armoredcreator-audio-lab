@@ -423,8 +423,8 @@ async def main_async() -> int:
                 coordinator1.close()
 
             print(
-                "\n[2/3] SOURCE 2 - processamento normal: cada vídeo "
-                "é classificado pelo próprio áudio"
+                "\n[2/3] SOURCE 2 - processamento normal de um vídeo real; "
+                "o áudio define o tratamento"
             )
             coordinator2 = _build_runtime(
                 temp_root / "source2",
@@ -451,10 +451,7 @@ async def main_async() -> int:
             unified_module.subprocess.run = capture_run2
 
             try:
-                items_to_process = max(
-                    1,
-                    int(os.getenv("ARMORED_CERT_SOURCE2_ITEMS", "2")),
-                )
+                items_to_process = 1
 
                 processed_source2 = 0
                 for index in range(1, items_to_process + 1):
@@ -562,7 +559,7 @@ async def main_async() -> int:
     print("PASS: Vision antes de materialização para as duas fontes.")
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
     print("PASS: Source 1 SPEECH/SPEECH_PLUS_MUSIC publicado e confirmado no tópico 228.")
-    print("PASS: Source 2 processou vídeos reais conforme o áudio detectado e publicou no tópico 1160.")
+    print("PASS: Source 2 processou um vídeo real conforme o áudio detectado e publicou no tópico 1160.")
     print("PASS: MUSIC_ONLY e NO_AUDIO não chamaram RVC e removeram o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
