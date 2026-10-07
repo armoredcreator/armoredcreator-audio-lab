@@ -37,7 +37,7 @@ class StartupReconciler:
             "FROM items ORDER BY created_at,content_id"
         ).fetchall()
         db_ids = {
-            (str(row["source_id"]), str(row["content_id"]))
+            (str(row["source_id"]), str(row["telegram_message_id"]))
             for row in rows
         }
         summary = {
