@@ -1458,31 +1458,104 @@ Vision aceita + download falha
 
 ---
 
-# 29. Evidência de testes do estado atual
+# 29. Evidência de testes — estado certificado atual
 
-A validação integral mais recente concluída antes desta atualização documental foi:
+Esta seção substitui qualquer contagem de testes anterior registrada neste README.
 
-```
-GitHub Actions
-run #100
-job: unit
+## 29.1 Commit certificado
 
-204 passed
-1 skipped
-28.15s
-```
+Branch: fix/multisource-storage-audio-intelligence  
+Commit: 3f8dfb1
 
-Commit validado:
+## 29.2 Suíte automatizada local
 
-```
-368418d19cf3763b4e026001ef82970a76c4bd2b
-```
+Comando executado no checkout Windows:
 
-A versão atual do README está sendo atualizada como documentação da mesma branch.
+python -m pytest -q -W error::RuntimeWarning
 
-**Importante:** esse número comprova a suíte automatizada. Ele não substitui um E2E real novo com as duas fontes Telegram nesta mesma rodada.
+Resultado real:
 
----
+206 passed, 1 skipped in 50.56s
+
+O tratamento RuntimeWarning como erro também passou.
+
+## 29.3 GitHub Actions
+
+Workflow: tests  
+Run: #129  
+Job: unit  
+Conclusão: SUCCESS
+
+A CI executou a suíte completa do commit 3f8dfb1 sem falhas.
+
+## 29.4 E2E real multisource
+
+Script executado:
+
+scripts/e2e_multisource_contracts_real.py
+
+Rotas:
+
+| Fonte | Origem | Destino |
+|---|---|---|
+| Source 1 | -1003788989075 | Hub -1004341972306 / tópico 228 |
+| Source 2 | -1002698134896 | Hub -1004341972306 / tópico 1160 |
+
+### Source 1 — evidência real
+
+Item: -1003788989075_2448  
+Download: 3.9 MiB em 48.3s  
+Vision → Download: confirmado  
+AudioKind: SPEECH  
+speech_present: True  
+Studio: RVC Melody executado  
+Hub: mensagem 1316 no tópico 228  
+Telegram: CONFIRMED
+
+Resultado:
+
+Vision autorizou a materialização → vídeo processado → fala detectada → RVC executado → publicação real → confirmação real.
+
+### Source 2 — evidência real
+
+Item: -1002698134896_177796  
+Download: 3.0 MiB em 28.2s  
+Vision → Download: confirmado  
+AudioKind: NO_AUDIO  
+speech_present: False  
+Studio: RVC não executado  
+Áudio original: removido conforme a regra de conteúdo sem fala  
+Efeito principal: tratamento alto  
+Hub: mensagem 1317 no tópico 1160  
+Telegram: CONFIRMED
+
+Resultado:
+
+Vision autorizou a materialização → vídeo processado → ausência de áudio detectada → RVC não executado → tratamento sem áudio original → publicação real → confirmação real.
+
+## 29.5 Contratos comprovados nesta rodada
+
+- Vision antes de materialização/download nas duas fontes.
+- Isolamento físico em Videos GRUPO FONTE 1 e Videos GRUPO FONTE 2.
+- Source 1 preservada e processada pelo fluxo normal.
+- Source 2 processada pelo mesmo contrato operacional, com parâmetros de rota diferentes.
+- SPEECH → RVC.
+- NO_AUDIO → sem RVC.
+- Hub correto por fonte/tópico.
+- Confirmação Telegram real.
+- Banco de produção mantido somente para leitura.
+- Nenhuma fila física foi introduzida.
+- Nenhum lote de vídeos foi pré-baixado para a certificação.
+
+Resultado final do E2E:
+
+**CERTIFICADO**
+
+## 29.6 Limite da evidência
+
+Esta certificação comprova o contrato ponta a ponta em uma execução real com um item de cada fonte. Ela não significa que todo o histórico das duas fontes tenha sido reprocessado nesta rodada.
+
+As evidências históricas da referência continuam válidas como referência de comportamento, mas não devem ser apresentadas como se tivessem sido novamente executadas no commit atual.
 
 # 30. Evidências reais herdadas da referência
 
@@ -1687,24 +1760,244 @@ armoredcreator/armoredcreator-audio-lab
 
 # 36. Estado deste Lab
 
-**Branch:**
+Branch: fix/multisource-storage-audio-intelligence
 
-```
-fix/multisource-storage-audio-intelligence
-```
+Commit certificado: 3f8dfb1
 
-**Última validação integral de testes antes da atualização deste README:**
+Suíte local: 206 passed, 1 skipped
 
-```
-204 passed, 1 skipped
-```
+CI #129: SUCCESS
 
-**Último commit de código validado:**
+E2E real multisource: CERTIFICADO
 
-```
-368418d19cf3763b4e026001ef82970a76c4bd2b
-```
+PR: #4
 
-**PR:** #4
+O estado atual é considerado estável para a evolução:
 
-O PR permanece voltado à evolução multisource + Vision-before-Download + Audio Intelligence, com a Fonte 1 preservada como comportamento de referência.
+- multisource;
+- Vision-before-Download;
+- Storage isolado por fonte;
+- Audio Intelligence;
+- RVC condicionado à presença de fala;
+- Hub routing por fonte;
+- reconciliação Telegram.
+
+Nenhuma mudança funcional adicional deve ser misturada ao fechamento desta certificação sem nova bateria de testes e nova evidência E2E.
+
+---
+
+# 37. Próxima proposta — pré-detecção de texto sobreposto no vídeo
+
+## 37.1 Objetivo
+
+A próxima evolução proposta é adicionar uma verificação geral de conteúdo visual:
+
+vídeo materializado → detectar texto sobreposto → se houver texto, descartar → caso contrário, continuar o Studio normal.
+
+A regra deve valer para Source 1 e Source 2.
+
+A hipótese operacional é que Source 1 tenha poucos ou nenhum vídeo com texto sobreposto, mas a proteção será geral e não específica de fonte.
+
+**Esta proposta ainda não está implementada e não faz parte da certificação do commit 3f8dfb1.**
+
+## 37.2 Relação com o detector de banner da V1
+
+A referência original possui:
+
+- ArmoredStudio/analysis/banner_analyzer.py — analisa frames iniciais e mudanças/estabilidade visual para identificar uma provável abertura/banner.
+- ArmoredStudio/analysis/banner.py — analisa o áudio e determina o início da voz e os tempos relacionados ao corte do banner.
+
+Esses módulos não são OCR.
+
+O detector de texto deve ser uma análise nova e independente, por exemplo em ArmoredStudio/analysis/text_detector.py.
+
+Não devemos transformar o detector de banner em detector de texto e não devemos misturar as duas regras.
+
+## 37.3 É viável?
+
+**Sim, é viável.**
+
+A diferença fundamental em relação ao Vision-before-Download é que um detector de texto precisa observar os pixels reais do vídeo. Portanto, ele não substitui a Vision V1.
+
+A ordem segura continua:
+
+Vision V1 → materialização do ORIGINAL → text detector → restante da análise/Studio.
+
+Isso significa que o vídeo só é baixado depois da autorização da Vision, mas pode ser descartado logo no começo da análise visual, antes de gastar CPU com RVC, finalização e publicação.
+
+Uma implementação baseada em Text Detection é adequada para esse objetivo porque o detector localiza regiões de texto em imagens; não é necessário reconhecer o conteúdo textual para a decisão básica. O PaddleOCR documenta módulo dedicado de Text Detection e suporte de inferência em CPU.
+
+Referências técnicas oficiais:
+
+https://www.paddleocr.ai/latest/en/version3.x/module_usage/text_detection.html  
+https://www.paddleocr.ai/latest/en/quick_start.html
+
+## 37.4 Não precisa começar com OCR completo
+
+O primeiro objetivo deve ser responder:
+
+**Existe uma região de texto no frame?**
+
+e não:
+
+**Qual é o texto?**
+
+Isso permite começar com detecção de regiões e confiança, reduzindo a complexidade em relação a um OCR completo.
+
+Exemplos que a política pode considerar texto:
+
+- legendas;
+- watermark;
+- @usuario;
+- nome de loja;
+- preço;
+- texto promocional;
+- botões ou elementos de interface;
+- faixas com palavras;
+- texto inserido sobre a imagem.
+
+A decisão deve ser visual e independente de idioma.
+
+## 37.5 Amostragem do vídeo
+
+Não é necessário inferir em todos os frames.
+
+A primeira versão deve usar amostragem temporal, por exemplo:
+
+0.0s, 0.5s, 1.0s, 1.5s, 2.0s, ... até o fim do vídeo.
+
+A análise deve registrar pelo menos:
+
+- quantidade de frames examinados;
+- frames com texto;
+- maior confiança;
+- regiões detectadas;
+- primeiro instante em que o texto apareceu.
+
+A regra de decisão precisa equilibrar recall e falso positivo. Como a política desejada é descartar vídeos com texto, o detector deve ser conservador contra aprovar um caso claramente textual.
+
+## 37.6 Onde deve entrar
+
+O local mais seguro é no começo da AnalysisEngine do Studio, antes de RVC e finalização:
+
+ORIGINAL → Text Detector
+
+Se texto for detectado:
+
+- não executar RVC;
+- não executar finalização;
+- não publicar;
+- registrar a evidência;
+- concluir o descarte de forma durável;
+- permitir avanço seguro do checkpoint.
+
+Se não houver texto:
+
+- seguir análise de banner;
+- blackbar;
+- VEO/Gemini;
+- Audio Intelligence;
+- plano;
+- RVC quando aplicável;
+- finalização.
+
+Isso mantém Sync, Vision, storage, roteamento e Telegram fora dessa nova regra.
+
+## 37.7 O que não deve ser alterado
+
+Para impedir regressões, a implementação do filtro de texto não deve mudar:
+
+- ArmoredSync ou a regra de descoberta;
+- grouped_id;
+- deduplicação por source;
+- checkpoints;
+- MultiTelegramSource;
+- Storage multisource;
+- Hub routing;
+- reconciliação Telegram;
+- Vision-before-Download;
+- Audio Intelligence;
+- RVC.
+
+A mudança deve ser uma etapa de análise visual isolada.
+
+## 37.8 Estado de descarte
+
+O modelo atual possui RECEIVED, VISION, WAITING_VISION, IA, STUDIO, PUBLISHING, PUBLISHED, RECOVERY e FAILED.
+
+Hoje não existe estado específico para “descartado por texto”.
+
+Não devemos reutilizar FAILED como se fosse uma falha técnica. “Texto detectado” é uma decisão deliberada de elegibilidade.
+
+A solução mais limpa é um estado terminal explícito, por exemplo:
+
+DISCARDED_TEXT
+
+com state event e motivo:
+
+text-detected
+
+Esse estado só deve ser introduzido junto com testes de DB, checkpoint, Recovery e lifecycle. Não deve ser improvisado durante a implementação.
+
+## 37.9 Primeira implementação segura
+
+A evolução deve ser feita em três fases.
+
+### Fase A — detector isolado
+
+Criar somente o detector e seus testes:
+
+- vídeo sem texto;
+- texto grande;
+- legenda;
+- watermark;
+- texto pequeno;
+- texto intermitente;
+- vídeo inválido.
+
+Nenhuma mudança em Sync.
+
+### Fase B — integração sem rejeição automática
+
+Executar o detector dentro da análise do Studio, mas apenas registrar:
+
+- detected/not detected;
+- confiança;
+- frames afetados;
+- tempos.
+
+Configuração inicial proposta:
+
+ARMORED_VIDEO_TEXT_FILTER=0
+
+Assim conseguimos observar falsos positivos antes de alterar a política de produção.
+
+### Fase C — rejeição
+
+Depois da validação real:
+
+ARMORED_VIDEO_TEXT_FILTER=1
+
+A partir daí:
+
+texto detectado → descarte terminal → sem RVC → sem finalização → sem publicação.
+
+## 37.10 Critério para considerar pronto
+
+O filtro só deve ser considerado pronto quando houver prova de que:
+
+- vídeo sem texto continua passando;
+- vídeo claramente textual é detectado;
+- watermark é detectado;
+- legenda é detectada;
+- o filtro não confunde o banner visual sem texto com texto;
+- Source 1 certificada continua passando;
+- Source 2 certificada continua passando;
+- nenhum candidato com texto chega a RVC/finalização/publicação;
+- checkpoint permanece seguro;
+- descarte fica auditável no SQLite.
+
+**Não alterar a certificação atual para implementar essa proposta.**
+
+O commit 3f8dfb1 continua sendo a base certificada. O detector de texto deve nascer em uma evolução separada e só depois receber sua própria certificação.
+
