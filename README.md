@@ -5,7 +5,7 @@
 > Referência congelada: `armoredcreator/armoredcreator-test`.
 > Implementação desta evolução: `armoredcreator/armoredcreator-audio-lab`.
 >
-> Branch: `feat/source2-vision-before-download`.
+> Branch: `fix/multisource-storage-audio-intelligence`.
 
 ---
 
@@ -189,7 +189,7 @@ Responsabilidades:
 - controlar checkpoints;
 - administrar o lifecycle da sessão Telethon.
 
-A materialização permanece canônica em `storage/videos/{content_id}/`.
+A materialização usa o workspace canônico da fonte: `storage/Videos GRUPO_FONTE_{N}/{content_id}/`, definido por `source_id`.
 
 ## 4.1 Regra de descoberta
 
