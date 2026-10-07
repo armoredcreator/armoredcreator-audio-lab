@@ -117,6 +117,9 @@ class AudioIntelligence:
             freqs = np.fft.rfftfreq(cls.FRAME, 1.0 / cls.SAMPLE_RATE)
             spectral_sum = float(np.sum(power)) + 1e-12
             centroid = float(np.sum(freqs * power) / spectral_sum)
+            bandwidth = float(
+                np.sqrt(np.sum(((freqs - centroid) ** 2) * power) / spectral_sum)
+            )
             flatness = float(np.exp(np.mean(np.log(spectrum))) / (np.mean(spectrum) + 1e-12))
 
             signs = np.signbit(frame)
@@ -129,9 +132,10 @@ class AudioIntelligence:
             # mid-band with moderate ZCR and less purely harmonic spectra.
             speech_score = (
                 0.40 * (1.0 if 250.0 <= centroid <= 3200.0 else 0.0)
-                + 0.25 * (1.0 if 0.025 <= zcr <= 0.22 else 0.0)
+                + 0.20 * (1.0 if 0.025 <= zcr <= 0.22 else 0.0)
                 + 0.20 * (1.0 if 0.45 <= band_energy <= 0.98 else 0.0)
-                + 0.15 * (1.0 if flatness >= 0.12 else 0.0)
+                + 0.10 * (1.0 if flatness >= 0.12 else 0.0)
+                + 0.10 * (1.0 if bandwidth >= 250.0 else 0.0)
             )
 
             # Music evidence is strongest for sustained harmonic/tonal energy.
