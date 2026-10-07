@@ -166,7 +166,7 @@ class StartupReconciler:
                 if not workspace.is_dir():
                     continue
                 if not any(workspace.name == item_id for _, item_id in db_ids):
-                    summary["orphans"].append(f"legacy/videos/{workspace.name}")
+                    summary["orphans"].append(workspace.name)
                     self.log.warning(
                         "[STARTUP][ORPHAN] legacy storage/videos/%s sem registro SQLite",
                         workspace.name,
