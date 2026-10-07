@@ -85,7 +85,7 @@ class SyncService:
             if not stored_path:
                 # Repair legacy rows deterministically from the stable Telegram ID + URL.
                 original = self.storage.original(
-                    item_id,
+                    message.telegram_message_id,
                     ".mp4",
                     original_url=existing["original_url"] or message.original_url,
                     source_id=message.source_id,
@@ -99,7 +99,7 @@ class SyncService:
             else ".mp4"
         )
         item_id = self.db.content_id_for(message.telegram_message_id, message.source_id)
-        original = self.storage.original(item_id, suffix, original_url=message.original_url, source_id=message.source_id)
+        original = self.storage.original(message.telegram_message_id, suffix, original_url=message.original_url, source_id=message.source_id)
         self.db.reserve_item(
             message.telegram_message_id,
             source_id=message.source_id,
@@ -144,7 +144,7 @@ class SyncService:
         if existing:
             item_id = str(existing["content_id"])
             if not str(existing["original_path"] or "").strip():
-                original = self.storage.original(item_id, ".mp4", original_url=existing["original_url"] or message.original_url, source_id=message.source_id)
+                original = self.storage.original(message.telegram_message_id, ".mp4", original_url=existing["original_url"] or message.original_url, source_id=message.source_id)
                 self.db.repair_original_path(item_id, original)
             return item_id
         suffix = message.source_path.suffix if message.source_path is not None and message.source_path.suffix else ".mp4"
