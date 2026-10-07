@@ -159,6 +159,34 @@ class SyncLifecycleTests(unittest.TestCase):
         self.assertEqual(candidates[0][4], "https://shopee.com.br/x/abc")
         self.assertEqual(candidates[1][4], "https://shopee.com.br/x/def")
 
+    def test_historical_candidate_resolves_video_then_link_in_chronological_order(self):
+        source = CandidateSource(Path("."), FakeReader())
+
+        async def newest_first_messages(source_name, topic_id):
+            # Chronological order is VIDEO(601) -> LINK(602). Telegram history
+            # arrives newest-first, so the iterator sees LINK before VIDEO.
+            for message in [
+                FakeMessage(602, text="https://s.shopee.com.br/adjacent-forward"),
+                FakeMessage(601, video=True),
+            ]:
+                yield message
+
+        source._topic_messages = newest_first_messages
+        candidates = []
+
+        async def collect():
+            async for candidate in source._candidate_iterator("source", [(10, "topic")]):
+                candidates.append(candidate)
+
+        asyncio.run(collect())
+
+        self.assertEqual([candidate[0] for candidate in candidates], [601])
+        self.assertEqual(
+            candidates[0][4],
+            "https://s.shopee.com.br/adjacent-forward",
+        )
+
+
     def test_historical_candidate_resolves_shopee_from_same_grouped_album(self):
         source = CandidateSource(Path("."), FakeReader())
         source._topic_messages = None
