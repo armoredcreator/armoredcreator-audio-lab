@@ -71,11 +71,42 @@ class Storage:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def workspace(self, telegram_message_id: str | int, source_id: str | None = None) -> Path:
+    def video_roots(self) -> tuple[Path, ...]:
+        """Return every configured video root without creating directories."""
+        roots: list[Path] = [self.videos]
+        for index in range(1, 10):
+            source_id = (
+                os.getenv(f"ARMORED_SOURCE_{index}_ID")
+                or os.getenv(f"ARMORED_SOURCE_{index}_CHAT_ID")
+                or ""
+            ).strip()
+            if not source_id:
+                continue
+            folder = (
+                os.getenv(f"ARMORED_SOURCE_{index}_VIDEO_DIR")
+                or f"Videos GRUPO_FONTE_{index}"
+            ).strip()
+            path = self.storage / folder
+            if path not in roots:
+                roots.append(path)
+        return tuple(roots)
+
+    def workspace_path(
+        self,
+        telegram_message_id: str | int,
+        source_id: str | None = None,
+    ) -> Path:
         content_id = str(telegram_message_id).strip()
         if not content_id:
             raise ValueError("telegram-message-id-required")
-        path = self._videos_root(source_id) / content_id
+        normalized = str(source_id or "").strip()
+        if not normalized or normalized == "telegram":
+            return self.videos / content_id
+        root = self._configured_source_video_root(normalized) or self.videos
+        return root / content_id
+
+    def workspace(self, telegram_message_id: str | int, source_id: str | None = None) -> Path:
+        path = self.workspace_path(telegram_message_id, source_id=source_id)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
