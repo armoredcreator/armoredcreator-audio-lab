@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ class AnalysisResult:
     gemini: dict[str, Any]
     plan: dict[str, Any]
     validation: dict[str, Any]
-    audio: dict[str, Any]
+    audio: dict[str, Any] = field(default_factory=dict)
 
 
 class AnalysisEngine:
