@@ -154,6 +154,7 @@ class Recovery:
                 item_id,
                 item.affiliate_url,
                 item.affiliate_name,
+                source_id=item.source_id,
             )
         if result and result.is_file():
             if item.result_path is None:
