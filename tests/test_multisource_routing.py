@@ -178,6 +178,60 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
 
 
 
+def test_source2_live_checkpoint_is_committed_to_source2_topic(tmp_path: Path):
+    import asyncio
+    from types import SimpleNamespace
+    from ArmoredSync.service import MultiTelegramSource
+
+    class FakeSource:
+        def __init__(self):
+            self.source_id = "-1002698134896"
+            self.historical_materialization_failed = False
+            self.historical_scan_exhausted = False
+            self.historical_limit_reached = False
+            self.historical_collection_limited = False
+            self.committed = []
+
+        def is_historical_complete(self):
+            return True
+
+        async def fetch_live_candidate_async(self):
+            return (
+                SimpleNamespace(
+                    telegram_message_id="88",
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                ),
+                {1160: 88},
+            )
+
+        def commit_live_checkpoints(self, checkpoints):
+            self.committed.append(dict(checkpoints))
+
+    source = FakeSource()
+    wrapper = MultiTelegramSource.__new__(MultiTelegramSource)
+    wrapper.db = SimpleNamespace(all_sources_historical_complete=lambda ids: True)
+    wrapper.routes = (
+        SimpleNamespace(source=SimpleNamespace(chat_id="s1", source_id="-1003788989075")),
+        SimpleNamespace(source=SimpleNamespace(chat_id="s2", source_id="-1002698134896")),
+    )
+    wrapper.sources = (source,)
+    wrapper._cursor = 0
+    wrapper._last_source = None
+    wrapper._pending_source = None
+    wrapper._pending_message = None
+    wrapper._pending_checkpoints = {}
+
+    message, checkpoints = asyncio.run(wrapper.fetch_live_candidate_async())
+
+    assert message.source_id == "-1002698134896"
+    assert checkpoints == {1160: 88}
+
+    wrapper.commit_live_checkpoints(checkpoints)
+    assert source.committed == [{1160: 88}]
+
+
 def test_catchup_reuses_source2_published_item_without_parsing_composite_id(tmp_path: Path):
     import asyncio
     from types import SimpleNamespace
