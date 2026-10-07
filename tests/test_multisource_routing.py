@@ -7,6 +7,8 @@ from ArmoredHub.service import ArmoredHub
 from ArmoredSync.service import MultiTelegramSource, TelegramSource
 from armored_core.database import Database
 from armored_core.routing import load_routes
+from armored_core.storage import Storage
+from armored_core.models import State
 
 
 def _routes(monkeypatch):
@@ -175,3 +177,73 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
     assert db.source_sync_topic_checkpoint("-1003788989075", 228) == 900
     assert db.source_sync_topic_checkpoint("-1002698134896", 228) == 0
 
+
+def test_source_workspaces_are_physically_separated(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+
+    storage = Storage(tmp_path)
+    first = storage.workspace("77", source_id="-1003788989075")
+    second = storage.workspace("77", source_id="-1002698134896")
+
+    assert first != second
+    assert first == tmp_path / "storage" / "Videos GRUPO_FONTE_1" / "77"
+    assert second == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77"
+    assert storage.original(
+        "77",
+        original_url="https://shopee.com.br/product/1",
+        source_id="-1003788989075",
+    ).parent == first
+    assert storage.result(
+        "77",
+        affiliate_url="https://shopee.com.br/product/1",
+        source_id="-1002698134896",
+    ).parent == second
+
+
+def test_recovery_item_is_not_hidden_by_source_scoped_url_dedup(tmp_path: Path):
+    db = Database(tmp_path / "db.sqlite")
+    url = "https://shopee.com.br/product/recover-me"
+    source = "-1003788989075"
+    db.reserve_item(
+        "99",
+        source_id=source,
+        original_url=url,
+        original_path=tmp_path / "missing.mp4",
+    )
+    db.set_vision("99", "produto", "https://shopee.com.br/product/affiliate")
+    db.transition("99", State.RECOVERY, "download-timeout")
+
+    telegram = TelegramSource(
+        tmp_path,
+        SimpleNamespace(),
+        db,
+        source=source,
+        source_id=source,
+    )
+
+    assert telegram._shopee_url_exists(url) is False
+
+
+def test_completed_item_still_suppresses_source_scoped_url_dedup(tmp_path: Path):
+    db = Database(tmp_path / "db.sqlite")
+    url = "https://shopee.com.br/product/completed"
+    source = "-1003788989075"
+    db.reserve_item(
+        "100",
+        source_id=source,
+        original_url=url,
+        original_path=tmp_path / "missing.mp4",
+    )
+    db.transition("100", State.PUBLISHED, "publication-confirmed")
+    db.mark_cleanup_completed("100")
+
+    telegram = TelegramSource(
+        tmp_path,
+        SimpleNamespace(),
+        db,
+        source=source,
+        source_id=source,
+    )
+
+    assert telegram._shopee_url_exists(url) is True

@@ -275,22 +275,51 @@ class TelegramSource:
         return int(topic_id) if topic_id else None
 
     def _shopee_url_exists(self, original_url: str | None) -> bool:
-        """Return whether this Shopee URL is already represented in SQLite.
+        """Return whether a Shopee URL is already safely represented.
 
-        URL identity is the Sync-level content identity for discovery. The
-        lower-level ingest service intentionally keeps Telegram IDs distinct;
-        this filter prevents the same Shopee content from being collected twice.
+        A completed item suppresses rediscovery. An incomplete historical item
+        must remain discoverable so Recovery can re-materialize its ORIGINAL.
+        WAITING_VISION is also durable and must not be retried automatically.
         """
         if self.db is None or not original_url:
             return False
         conn = getattr(self.db, "conn", None)
         if conn is None:
             return False
-        row = conn.execute(
-            "SELECT 1 FROM items WHERE source_id=? AND LOWER(TRIM(original_url)) = LOWER(TRIM(?)) LIMIT 1",
+
+        rows = conn.execute(
+            "SELECT state, cleanup_completed, original_path, affiliate_url "
+            "FROM items WHERE source_id=? "
+            "AND LOWER(TRIM(original_url)) = LOWER(TRIM(?))",
             (str(self.source_id or "telegram"), str(original_url)),
-        ).fetchone()
-        return row is not None
+        ).fetchall()
+
+        for row in rows:
+            state = str(row["state"] or "")
+            if state == "PUBLISHED" and bool(row["cleanup_completed"]):
+                return True
+
+            stored_path = str(row["original_path"] or "").strip()
+            if stored_path:
+                try:
+                    if Path(stored_path).is_file():
+                        return True
+                except OSError:
+                    pass
+
+            # Coordinator's durable source-rediscovery contract explicitly
+            # includes RECOVERY and pre-download RECEIVED/VISION items whose
+            # Vision evidence exists but whose ORIGINAL is missing.
+            if state in {"RECOVERY", "RECEIVED", "VISION"} and str(row["affiliate_url"] or "").strip():
+                return False
+
+            # WAITING_VISION is a durable classification, not a technical
+            # failure. Do not keep rediscovering it just because its ORIGINAL
+            # does not exist.
+            if state == "WAITING_VISION":
+                return True
+
+        return False
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
         from telethon import functions
