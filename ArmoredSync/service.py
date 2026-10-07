@@ -162,8 +162,6 @@ class TelegramSource:
         self._historical_limit_reached = False
         self._historical_materialization_failed = False
         self._historical_scan_exhausted = False
-        self._recent_probe_done = False
-        self._discovered: set[int] = set()
         self._live_topic_index = 0
 
     @property
@@ -227,8 +225,6 @@ class TelegramSource:
         self._historical_candidates_emitted = 0
         self._historical_checkpoints.clear()
         self._seen.clear()
-        self._discovered.clear()
-        self._recent_probe_done = False
 
     def _catchup_limit_before_candidate(self) -> bool:
         if self._historical_limit is None:
@@ -297,79 +293,22 @@ class TelegramSource:
         return row is not None
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
-        """Return every forum topic, paginating large forums safely.
-
-        Telegram returns forum topics in pages. A large Source 2 can have
-        considerably more than 100 topics, so a single request is not a
-        complete historical source and can silently hide older candidates.
-        """
         from telethon import functions
-
+        result = await self.reader.client(
+            functions.messages.GetForumTopicsRequest(
+                peer=source,
+                q=None,
+                offset_date=None,
+                offset_id=0,
+                offset_topic=0,
+                limit=100,
+            )
+        )
         topics: list[tuple[int, str]] = []
-        seen_topics: set[int] = set()
-        offset_date = 0
-        offset_id = 0
-        offset_topic = 0
-
-        while True:
-            result = await self.reader.client(
-                functions.messages.GetForumTopicsRequest(
-                    peer=source,
-                    q=None,
-                    offset_date=offset_date,
-                    offset_id=offset_id,
-                    offset_topic=offset_topic,
-                    limit=100,
-                )
-            )
-            page = []
-            for topic in getattr(result, "topics", []) or []:
-                topic_id = getattr(topic, "id", None)
-                if topic_id is None:
-                    continue
-                topic_id = int(topic_id)
-                if topic_id in seen_topics:
-                    continue
-                seen_topics.add(topic_id)
-                title = str(getattr(topic, "title", None) or topic_id).strip()
-                topics.append((topic_id, title))
-                page.append(topic)
-
-            total = int(getattr(result, "count", 0) or 0)
-            print(
-                f"[SYNC][TOPICS] source={source} "
-                f"page={len(page)} total={total or '?'} collected={len(topics)}"
-            )
-
-            if not page or len(page) < 100 or (total and len(topics) >= total):
-                break
-
-            last = page[-1]
-            last_topic = int(getattr(last, "id", 0) or 0)
-            last_top_message = int(getattr(last, "top_message", 0) or 0)
-            if last_topic <= 0:
-                break
-
-            message_dates = {
-                int(getattr(message, "id", 0) or 0): getattr(message, "date", None)
-                for message in getattr(result, "messages", []) or []
-            }
-            last_date = message_dates.get(last_top_message)
-            if last_date is None:
-                last_date = getattr(last, "date", None)
-
-            if last_date is None:
-                next_offset_date = 0
-            else:
-                next_offset_date = int(last_date.timestamp())
-
-            next_cursor = (next_offset_date, last_top_message, last_topic)
-            current_cursor = (offset_date, offset_id, offset_topic)
-            if next_cursor == current_cursor:
-                break
-
-            offset_date, offset_id, offset_topic = next_cursor
-
+        for topic in getattr(result, "topics", []) or []:
+            topic_id = getattr(topic, "id", None)
+            if topic_id is not None:
+                topics.append((int(topic_id), str(getattr(topic, "title", None) or topic_id).strip()))
         return topics
 
     async def _topic_messages(self, source: str, topic_id: int):
@@ -500,32 +439,12 @@ class TelegramSource:
             topics = await self._discover_topics(source_ref)
             if not topics:
                 raise RuntimeError(f"Nenhum tópico de fórum encontrado na fonte Telegram {source}.")
-
-            if not self._recent_probe_done:
-                self._recent_probe_done = True
-                async for candidate in self._recent_candidates(source_ref, topics):
-                    message_id, topic_id, topic_name, message, original_url = candidate
-                    self._historical_candidates_emitted += 1
-                    return SyncMessage(
-                        telegram_message_id=str(message_id),
-                        source_id=source_id,
-                        topic_id=topic_id,
-                        topic_name=topic_name,
-                        original_url=original_url,
-                        materialize=lambda target, m=message: self._download_to(m, target),
-                    )
-
             self._topic_iterator = self._candidate_iterator(source_ref, topics)
 
         async for candidate in self._topic_iterator:
             message_id, topic_id, topic_name, message, original_url = candidate
-            if message_id in self._seen or message_id in self._discovered:
+            if message_id in self._seen:
                 continue
-            # The bounded certification limit belongs to the
-            # Coordinator, not to Sync discovery. Sync must behave exactly
-            # like production: keep discovering the next eligible candidate
-            # until the Coordinator has completed the requested number of
-            # full pipeline items.
             self._historical_candidates_emitted += 1
             return SyncMessage(
                 telegram_message_id=str(message_id),
@@ -536,13 +455,7 @@ class TelegramSource:
                 materialize=lambda target, m=message: self._download_to(m, target),
             )
         if self._historical_materialization_failed:
-            # Do not advance the scan checkpoint to the end of history and do
-            # not switch to LIVE. The failed candidate remains recoverable and
-            # will be rediscovered after restart.
             return None
-        # The Coordinator owns historical checkpoint advancement. Reaching
-        # the end of discovery is not sufficient to declare CATCH-UP complete:
-        # the last discovered candidates may still be processing.
         self._historical_scan_exhausted = True
         return None
 
@@ -758,144 +671,59 @@ class TelegramSource:
                 yield candidate
 
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
-        """Stream historical candidates without building a topic-sized list."""
-        for topic_id, topic_name in topics:
-            pending_video = None
-            pending_link = None
-            pending_group_id = None
-            pending_group: list[Any] = []
-            topic_max_id = 0
+        """Stream the canonical candidates while interleaving forum topics.
 
-            async def flush_group():
-                nonlocal pending_group_id, pending_group
-                if pending_group:
-                    for candidate in self._grouped_candidates(
-                        pending_group,
-                        int(topic_id),
-                        topic_name,
-                    ):
-                        yield candidate
-                pending_group_id = None
-                pending_group = []
+        Candidate semantics are the same as the certified Source 1:
+        same-message video+URL, immediately-following non-video URL, and
+        grouped albums containing a video plus one unambiguous Shopee URL.
+        The only change is scheduling: topics are advanced round-robin so a
+        large/old topic cannot monopolize CATCH-UP before another topic gets
+        inspected.
+        """
+        if not topics:
+            return
 
-            async for message in self._topic_messages(source, topic_id):
-                message_id = int(getattr(message, "id", 0) or 0)
-                if message_id > topic_max_id:
-                    topic_max_id = message_id
-                if message_id <= 0:
-                    continue
+        # One async iterator per topic. Each iterator fetches Telegram pages
+        # incrementally through _topic_messages; no materialization or batch of
+        # media is created here.
+        iterators = {
+            int(topic_id): self._topic_messages(source, int(topic_id)).__aiter__()
+            for topic_id, _topic_name in topics
+        }
+        states = {
+            int(topic_id): {
+                "topic_name": topic_name,
+                "pending_video": None,
+                "pending_group_id": None,
+                "pending_group": [],
+                "topic_max_id": 0,
+                "scanned": 0,
+            }
+            for topic_id, topic_name in topics
+        }
+        active = [int(topic_id) for topic_id, _topic_name in topics]
+        index = 0
 
-                grouped_id = getattr(message, "grouped_id", None)
-                if grouped_id is not None:
-                    grouped_id = int(grouped_id)
-                    if pending_group_id is None:
-                        if pending_video is not None:
-                            pending_id, pending_message = pending_video
-                            original_url = self._shopee_url(pending_message)
-                            if (
-                                pending_id not in self._seen
-                                and original_url is not None
-                                and not self._shopee_url_exists(original_url)
-                            ):
-                                yield (
-                                    pending_id,
-                                    int(topic_id),
-                                    topic_name,
-                                    pending_message,
-                                    original_url,
-                                )
-                            pending_video = None
-                        pending_group_id = grouped_id
-                        pending_group = [message]
-                    elif grouped_id == pending_group_id:
-                        pending_group.append(message)
-                    else:
-                        async for candidate in flush_group():
-                            yield candidate
-                        pending_group_id = grouped_id
-                        pending_group = [message]
-                    continue
+        async def flush_group(topic_id: int):
+            state = states[topic_id]
+            group = state["pending_group"]
+            if group:
+                for candidate in self._grouped_candidates(
+                    group,
+                    topic_id,
+                    state["topic_name"],
+                ):
+                    yield candidate
+            state["pending_group_id"] = None
+            state["pending_group"] = []
 
-                if pending_group:
-                    async for candidate in flush_group():
-                        yield candidate
-                    pending_link = None
-
-                if pending_video is not None:
-                    pending_id, pending_message = pending_video
-                    if not getattr(message, "video", None):
-                        original_url = self._shopee_url(message)
-                        if (
-                            pending_id not in self._seen
-                            and original_url is not None
-                            and not self._shopee_url_exists(original_url)
-                        ):
-                            yield (
-                                pending_id,
-                                int(topic_id),
-                                topic_name,
-                                pending_message,
-                                original_url,
-                            )
-                    # A non-video message can be paired with only this
-                    # immediately adjacent pending video. Do not reuse the
-                    # same link for an additional video.
-                    pending_video = None
-                    pending_link = None
-
-                if not getattr(message, "video", None):
-                    original_url = self._shopee_url(message)
-                    if (
-                        original_url is not None
-                        and not self._shopee_url_exists(original_url)
-                    ):
-                        # Telegram history is returned newest-first. Keeping
-                        # the link as the immediately previous message lets us
-                        # also resolve the chronological VIDEO -> LINK form,
-                        # which arrives here as LINK -> VIDEO.
-                        pending_link = (message_id, original_url)
-                    else:
-                        pending_link = None
-                    continue
-
-                original_url = self._shopee_url(message)
-                if original_url is not None:
-                    pending_link = None
-                    if (
-                        message_id not in self._seen
-                        and not self._shopee_url_exists(original_url)
-                    ):
-                        yield (
-                            message_id,
-                            int(topic_id),
-                            topic_name,
-                            message,
-                            original_url,
-                        )
-                    continue
-
-                if pending_link is not None:
-                    _, adjacent_url = pending_link
-                    if (
-                        message_id not in self._seen
-                        and not self._shopee_url_exists(adjacent_url)
-                    ):
-                        yield (
-                            message_id,
-                            int(topic_id),
-                            topic_name,
-                            message,
-                            adjacent_url,
-                        )
-                    pending_link = None
-                    continue
-
-                pending_video = (message_id, message)
-
-            if pending_group:
-                async for candidate in flush_group():
+        async def finalize_topic(topic_id: int):
+            state = states[topic_id]
+            if state["pending_group"]:
+                async for candidate in flush_group(topic_id):
                     yield candidate
 
+            pending_video = state["pending_video"]
             if pending_video is not None:
                 pending_id, pending_message = pending_video
                 original_url = self._shopee_url(pending_message)
@@ -906,14 +734,119 @@ class TelegramSource:
                 ):
                     yield (
                         pending_id,
-                        int(topic_id),
-                        topic_name,
+                        topic_id,
+                        state["topic_name"],
                         pending_message,
                         original_url,
                     )
+                state["pending_video"] = None
 
-            if topic_max_id:
-                self._historical_checkpoints[topic_id] = topic_max_id
+            if state["topic_max_id"]:
+                self._historical_checkpoints[topic_id] = state["topic_max_id"]
+
+        while active:
+            topic_id = active[index % len(active)]
+            index = (index + 1) % max(1, len(active))
+            iterator = iterators[topic_id]
+            state = states[topic_id]
+
+            try:
+                message = await iterator.__anext__()
+            except StopAsyncIteration:
+                # Flush only this topic and remove it. Other topics continue
+                # being inspected immediately.
+                async for candidate in finalize_topic(topic_id):
+                    yield candidate
+                active.remove(topic_id)
+                if active:
+                    index %= len(active)
+                continue
+
+            message_id = int(getattr(message, "id", 0) or 0)
+            if message_id > state["topic_max_id"]:
+                state["topic_max_id"] = message_id
+            if message_id <= 0:
+                continue
+            state["scanned"] += 1
+
+            grouped_id = getattr(message, "grouped_id", None)
+            if grouped_id is not None:
+                grouped_id = int(grouped_id)
+                if state["pending_group_id"] is None:
+                    pending_video = state["pending_video"]
+                    if pending_video is not None:
+                        pending_id, pending_message = pending_video
+                        original_url = self._shopee_url(pending_message)
+                        if (
+                            pending_id not in self._seen
+                            and original_url is not None
+                            and not self._shopee_url_exists(original_url)
+                        ):
+                            yield (
+                                pending_id,
+                                topic_id,
+                                state["topic_name"],
+                                pending_message,
+                                original_url,
+                            )
+                        state["pending_video"] = None
+                    state["pending_group_id"] = grouped_id
+                    state["pending_group"] = [message]
+                elif grouped_id == state["pending_group_id"]:
+                    state["pending_group"].append(message)
+                else:
+                    async for candidate in flush_group(topic_id):
+                        yield candidate
+                    state["pending_group_id"] = grouped_id
+                    state["pending_group"] = [message]
+                continue
+
+            if state["pending_group"]:
+                async for candidate in flush_group(topic_id):
+                    yield candidate
+
+            pending_video = state["pending_video"]
+            if pending_video is not None:
+                pending_id, pending_message = pending_video
+                if not getattr(message, "video", None):
+                    original_url = self._shopee_url(message)
+                    if (
+                        pending_id not in self._seen
+                        and original_url is not None
+                        and not self._shopee_url_exists(original_url)
+                    ):
+                        yield (
+                            pending_id,
+                            topic_id,
+                            state["topic_name"],
+                            pending_message,
+                            original_url,
+                        )
+                state["pending_video"] = None
+
+            if not getattr(message, "video", None):
+                continue
+
+            original_url = self._shopee_url(message)
+            if original_url is not None:
+                if (
+                    message_id not in self._seen
+                    and not self._shopee_url_exists(original_url)
+                ):
+                    yield (
+                        message_id,
+                        topic_id,
+                        state["topic_name"],
+                        message,
+                        original_url,
+                    )
+                continue
+
+            state["pending_video"] = (message_id, message)
+
+        # All topics have been exhausted; finalization above has already
+        # committed only in-memory checkpoint candidates.
+        return
 
     async def iter_historical_candidates_async(self):
         """Yield historical candidates using the canonical discovery logic."""
