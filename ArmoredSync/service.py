@@ -550,6 +550,7 @@ class TelegramSource:
         """Stream historical candidates without building a topic-sized list."""
         for topic_id, topic_name in topics:
             pending_video = None
+            pending_link = None
             pending_group_id = None
             pending_group: list[Any] = []
             topic_max_id = 0
@@ -607,6 +608,7 @@ class TelegramSource:
                 if pending_group:
                     async for candidate in flush_group():
                         yield candidate
+                    pending_link = None
 
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
@@ -624,13 +626,30 @@ class TelegramSource:
                                 pending_message,
                                 original_url,
                             )
+                    # A non-video message can be paired with only this
+                    # immediately adjacent pending video. Do not reuse the
+                    # same link for an additional video.
                     pending_video = None
+                    pending_link = None
 
                 if not getattr(message, "video", None):
+                    original_url = self._shopee_url(message)
+                    if (
+                        original_url is not None
+                        and not self._shopee_url_exists(original_url)
+                    ):
+                        # Telegram history is returned newest-first. Keeping
+                        # the link as the immediately previous message lets us
+                        # also resolve the chronological VIDEO -> LINK form,
+                        # which arrives here as LINK -> VIDEO.
+                        pending_link = (message_id, original_url)
+                    else:
+                        pending_link = None
                     continue
 
                 original_url = self._shopee_url(message)
                 if original_url is not None:
+                    pending_link = None
                     if (
                         message_id not in self._seen
                         and not self._shopee_url_exists(original_url)
@@ -642,6 +661,22 @@ class TelegramSource:
                             message,
                             original_url,
                         )
+                    continue
+
+                if pending_link is not None:
+                    _, adjacent_url = pending_link
+                    if (
+                        message_id not in self._seen
+                        and not self._shopee_url_exists(adjacent_url)
+                    ):
+                        yield (
+                            message_id,
+                            int(topic_id),
+                            topic_name,
+                            message,
+                            adjacent_url,
+                        )
+                    pending_link = None
                     continue
 
                 pending_video = (message_id, message)
