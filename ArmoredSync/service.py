@@ -162,6 +162,8 @@ class TelegramSource:
         self._historical_limit_reached = False
         self._historical_materialization_failed = False
         self._historical_scan_exhausted = False
+        self._recent_probe_done = False
+        self._discovered: set[int] = set()
         self._live_topic_index = 0
 
     @property
@@ -225,6 +227,8 @@ class TelegramSource:
         self._historical_candidates_emitted = 0
         self._historical_checkpoints.clear()
         self._seen.clear()
+        self._discovered.clear()
+        self._recent_probe_done = False
 
     def _catchup_limit_before_candidate(self) -> bool:
         if self._historical_limit is None:
@@ -337,7 +341,7 @@ class TelegramSource:
                 f"page={len(page)} total={total or '?'} collected={len(topics)}"
             )
 
-            if not page or (total and len(topics) >= total):
+            if not page or len(page) < 100 or (total and len(topics) >= total):
                 break
 
             last = page[-1]
@@ -496,11 +500,26 @@ class TelegramSource:
             topics = await self._discover_topics(source_ref)
             if not topics:
                 raise RuntimeError(f"Nenhum tópico de fórum encontrado na fonte Telegram {source}.")
+
+            if not self._recent_probe_done:
+                self._recent_probe_done = True
+                async for candidate in self._recent_candidates(source_ref, topics):
+                    message_id, topic_id, topic_name, message, original_url = candidate
+                    self._historical_candidates_emitted += 1
+                    return SyncMessage(
+                        telegram_message_id=str(message_id),
+                        source_id=source_id,
+                        topic_id=topic_id,
+                        topic_name=topic_name,
+                        original_url=original_url,
+                        materialize=lambda target, m=message: self._download_to(m, target),
+                    )
+
             self._topic_iterator = self._candidate_iterator(source_ref, topics)
 
         async for candidate in self._topic_iterator:
             message_id, topic_id, topic_name, message, original_url = candidate
-            if message_id in self._seen:
+            if message_id in self._seen or message_id in self._discovered:
                 continue
             # The bounded certification limit belongs to the
             # Coordinator, not to Sync discovery. Sync must behave exactly
@@ -602,6 +621,141 @@ class TelegramSource:
             return candidates
 
         return []
+
+    def _window_candidates(
+        self,
+        messages: list[Any],
+        topic_id: int,
+        topic_name: str,
+    ) -> list[tuple[int, int, str, Any, str]]:
+        """Apply the canonical candidate rules to a bounded recent window.
+
+        Discovery is identical for every source. This is only a bounded
+        accelerator before the full historical scan.
+        """
+        candidates: list[tuple[int, int, str, Any, str]] = []
+        grouped: dict[int, list[Any]] = {}
+        grouped_message_ids: set[int] = set()
+
+        for message in messages:
+            grouped_id = getattr(message, "grouped_id", None)
+            if grouped_id is None:
+                continue
+            group_id = int(grouped_id)
+            grouped.setdefault(group_id, []).append(message)
+            message_id = int(getattr(message, "id", 0) or 0)
+            if message_id > 0:
+                grouped_message_ids.add(message_id)
+
+        for group in grouped.values():
+            for candidate in self._grouped_candidates(group, topic_id, topic_name):
+                candidate_id = int(candidate[0])
+                if candidate_id in self._seen or candidate_id in self._discovered:
+                    continue
+                self._discovered.add(candidate_id)
+                candidates.append(candidate)
+
+        for index, message in enumerate(messages):
+            message_id = int(getattr(message, "id", 0) or 0)
+            if message_id <= 0 or message_id in grouped_message_ids:
+                continue
+
+            current_url = self._shopee_url(message)
+            current_is_video = bool(getattr(message, "video", None))
+
+            if current_is_video and current_url:
+                if (
+                    not self._shopee_url_exists(current_url)
+                    and message_id not in self._seen
+                    and message_id not in self._discovered
+                ):
+                    self._discovered.add(message_id)
+                    candidates.append(
+                        (message_id, topic_id, topic_name, message, current_url)
+                    )
+                continue
+
+            if index + 1 >= len(messages):
+                continue
+
+            next_message = messages[index + 1]
+            next_grouped = getattr(next_message, "grouped_id", None)
+            if next_grouped is not None:
+                continue
+
+            next_is_video = bool(getattr(next_message, "video", None))
+            next_url = self._shopee_url(next_message)
+
+            # History is newest-first. Therefore:
+            #   VIDEO -> LINK chronologically appears as LINK -> VIDEO here.
+            if (
+                not current_is_video
+                and current_url
+                and next_is_video
+                and not self._shopee_url_exists(current_url)
+            ):
+                next_id = int(getattr(next_message, "id", 0) or 0)
+                if (
+                    next_id > 0
+                    and next_id not in self._seen
+                    and next_id not in self._discovered
+                ):
+                    self._discovered.add(next_id)
+                    candidates.append(
+                        (next_id, topic_id, topic_name, next_message, current_url)
+                    )
+                continue
+
+            # The opposite chronological form LINK -> VIDEO appears as
+            # VIDEO -> LINK in newest-first history.
+            if (
+                current_is_video
+                and not current_url
+                and next_url
+                and not self._shopee_url_exists(next_url)
+                and message_id not in self._seen
+                and message_id not in self._discovered
+            ):
+                self._discovered.add(message_id)
+                candidates.append(
+                    (message_id, topic_id, topic_name, message, next_url)
+                )
+
+        return candidates
+
+    async def _recent_candidates(
+        self,
+        source: str,
+        topics: list[tuple[int, str]],
+    ):
+        try:
+            scan_limit = max(
+                20,
+                int(os.getenv("ARMORED_CATCHUP_RECENT_SCAN_LIMIT", "100")),
+            )
+        except ValueError:
+            scan_limit = 100
+
+        for topic_id, topic_name in topics:
+            messages = []
+            async for message in self.reader.client.iter_messages(
+                source,
+                reply_to=int(topic_id),
+                limit=scan_limit,
+            ):
+                messages.append(message)
+
+            candidates = self._window_candidates(
+                messages,
+                int(topic_id),
+                topic_name,
+            )
+            print(
+                f"[SYNC][PROBE] source={source} topic={topic_id} "
+                f"messages={len(messages)} candidates={len(candidates)}"
+            )
+            for candidate in candidates:
+                yield candidate
 
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
         """Stream historical candidates without building a topic-sized list."""
