@@ -132,7 +132,7 @@ class RecoveryTests(unittest.TestCase):
                 first_pipeline.run(self.item)
 
             after_failure = self.db.get(self.item)
-            self.assertEqual(after_failure.state, State.RECOVERY)
+                self.assertEqual(after_failure.state, State.RECOVERY)
             self.assertEqual(vision.calls, 1)
             self.assertEqual(after_failure.ia_context, vision.context)
             self.assertIsNone(after_failure.publication_caption)
@@ -204,7 +204,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(row.state, State.PUBLISHED)
         self.assertEqual(clean_studio.calls, 1)
         self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
-        # Successful publication performs the normal cleanup; only the immutable original remains.\n        self.assertFalse(row.result_path.exists())\n        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
+        # Successful publication performs the normal cleanup; only the immutable original remains.\n            self.assertFalse(row.result_path.exists())\n        self.assertEqual([p.name for p in row.workspace.iterdir()], [row.original_path.name])
         self.assertEqual(self.pub.count, 1)
 
     def test_legacy_failed_item_is_reopened_into_recovery(self):
@@ -299,22 +299,34 @@ class RecoveryTests(unittest.TestCase):
         from types import SimpleNamespace
 
         source_id = "-1002698134896"
-        original = self.storage.original(
-            "77",
-            original_url="https://shopee.com.br/77",
-            source_id=source_id,
-        )
-        original.write_bytes(b"SOURCE2-ORIGINAL")
-        item_id = self.db.create_item(
-            "77",
-            original,
-            source_id=source_id,
-            topic_id=1160,
-            topic_name="source2",
-            original_url="https://shopee.com.br/77",
-        )
-        self.db.set_vision(item_id, "recover-final", "https://example.invalid/a")
-        self.db.transition(item_id, State.RECOVERY, "source2-test")
+        from unittest.mock import patch
+
+        with patch.dict(
+            "os.environ",
+            {
+                "ARMORED_SOURCE_2_ID": source_id,
+                "ARMORED_SOURCE_2_CHAT_ID": source_id,
+                "ARMORED_SOURCE_2_VIDEO_DIR": "Videos GRUPO_FONTE_2",
+            },
+            clear=False,
+        ):
+            item_id = self.db.content_id_for("77", source_id)
+            original = self.storage.original(
+                item_id,
+                original_url="https://shopee.com.br/77",
+                source_id=source_id,
+            )
+            original.write_bytes(b"SOURCE2-ORIGINAL")
+            item_id = self.db.create_item(
+                "77",
+                original,
+                source_id=source_id,
+                topic_id=1160,
+                topic_name="source2",
+                original_url="https://shopee.com.br/77",
+            )
+            self.db.set_vision(item_id, "recover-final", "https://example.invalid/a")
+            self.db.transition(item_id, State.RECOVERY, "source2-test")
 
         class Source2Studio:
             def __init__(self, storage):
@@ -338,22 +350,22 @@ class RecoveryTests(unittest.TestCase):
                 result.write_bytes(payload + b"-R")
                 return StudioResult(working, result)
 
-        studio = Source2Studio(self.storage)
-        Recovery(
+            studio = Source2Studio(self.storage)
+            Recovery(
             self.db,
             self.storage,
             Vision(),
             studio,
-            self.pub,
-        ).reconcile(item_id)
+                self.pub,
+            ).reconcile(item_id)
 
-        row = self.db.get(item_id)
+            row = self.db.get(item_id)
         self.assertEqual(row.state, State.PUBLISHED)
-        self.assertEqual(studio.calls, 1)
-        expected_workspace = (
-            self.storage.storage / "Videos GRUPO_FONTE_2" / item_id
-        )
-        self.assertEqual(row.workspace, expected_workspace)
+            self.assertEqual(studio.calls, 1)
+            expected_workspace = (
+                self.storage.storage / "Videos GRUPO_FONTE_2" / item_id
+            )
+            self.assertEqual(row.workspace, expected_workspace)
         self.assertEqual(
             row.original_path,
             expected_workspace / f"{item_id}_77.mp4",
