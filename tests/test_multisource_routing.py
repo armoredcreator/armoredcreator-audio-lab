@@ -241,7 +241,7 @@ def test_catchup_reuses_source2_published_item_without_parsing_composite_id(tmp_
     db = Database(tmp_path / "db.sqlite")
     storage = Storage(tmp_path)
     original = storage.original(
-        "-1002698134896_77",
+        "77",
         original_url="https://s.shopee.com.br/source2",
         source_id="-1002698134896",
     )
@@ -313,3 +313,30 @@ def test_source_media_workspaces_are_physically_isolated(tmp_path: Path, monkeyp
     assert source1 == tmp_path / "storage" / "Videos GRUPO_FONTE_1" / "77" / "77_1.mp4"
     assert source2 == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77" / "77_1.mp4"
     assert not (tmp_path / "storage" / "sources").exists()
+
+
+def test_source2_reservation_keeps_db_identity_separate_from_storage_shape(tmp_path: Path, monkeypatch):
+    from armored_core.services import IngestMessage, SyncService
+
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_2_VIDEO_DIR", "Videos GRUPO_FONTE_2")
+
+    db = Database(tmp_path / "db.sqlite")
+    storage = Storage(tmp_path)
+    sync = SyncService(db, storage)
+    message = IngestMessage(
+        telegram_message_id="77",
+        source_id="-1002698134896",
+        original_url="https://s.shopee.com.br/source2",
+        materialize=lambda target: target.write_bytes(b"video"),
+    )
+
+    item_id = sync.reserve_message(message)
+    item = db.get(item_id)
+
+    assert item_id == "-1002698134896_77"
+    assert item.telegram_message_id == "77"
+    assert item.workspace == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77"
+    assert item.original_path == (
+        tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77" / "77_source2.mp4"
+    )
