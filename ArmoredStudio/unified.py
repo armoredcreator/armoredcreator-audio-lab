@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .analysis.video import obter_informacoes_video
+from .analysis.audio_intelligence import AudioIntelligence, AudioMode
 from .analysis.blackbar import analisar_bordas_video
 from .analysis.banner_analyzer import analisar_banner
 from .analysis.banner import analisar_banner as analisar_corte_banner
@@ -29,6 +30,7 @@ class AnalysisResult:
     gemini: dict[str, Any]
     plan: dict[str, Any]
     validation: dict[str, Any]
+    audio: dict[str, Any]
 
 
 class AnalysisEngine:
@@ -57,7 +59,8 @@ class AnalysisEngine:
         if not validation.get("valido"):
             raise RuntimeError("Plano de processamento inválido: " + "; ".join(validation.get("erros", [])))
 
-        return AnalysisResult(video, blackbar, banner, banner_cut, veo, gemini, plan, validation)
+        audio = self.audio_intelligence.analyze(source)
+        return AnalysisResult(video, blackbar, banner, banner_cut, veo, gemini, plan, validation, audio.as_dict())
 
 
 class UnifiedStudio:
@@ -71,6 +74,7 @@ class UnifiedStudio:
         self.root = Path(root).resolve()
         self.storage = storage
         self.analysis = analysis or AnalysisEngine()
+        self.audio_intelligence = AudioIntelligence(os.getenv("ARMORED_FFMPEG", "ffmpeg"))
 
     def _test_copy(self, source: Path, output: Path) -> None:
         if os.getenv("ARMORED_STUDIO_ALLOW_COPY") != "1":
@@ -122,36 +126,83 @@ class UnifiedStudio:
         if not shutil.which(ffmpeg):
             raise RuntimeError("FFmpeg não encontrado")
 
-        # RVC voice stage. RVC is deliberately explicit: if the configured
-        # environment/model is unavailable, the item fails instead of silently
-        # downgrading production processing.
+        # Audio Intelligence is a mandatory routing stage. The original audio
+        # is classified before RVC so music-only and silent videos never enter
+        # the voice converter.
+        audio_info = analysis.audio
+        audio_mode = str(audio_info.get("mode") or AudioMode.MUSIC_ONLY)
+        duration = max(0.1, float(analysis.video.get("duracao") or audio_info.get("duration_seconds") or 0.1))
         audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
-        subprocess.run(
-            [ffmpeg, "-y", "-i", str(source), "-vn", "-ac", "2", "-ar", "44100", str(audio_original)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
 
-        voice = os.getenv("ARMORED_STUDIO_RVC_VOICE", "melody")
-        logging.getLogger(__name__).info(
-            "[STUDIO][ITEM %s] RVC iniciando voz=%s",
-            item.content_id,
-            voice,
-        )
-        from .processing.rvc import converter_voz
-        converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)
-        logging.getLogger(__name__).info(
-            "[STUDIO][ITEM %s] RVC concluído",
-            item.content_id,
-        )
+        try:
+            if audio_mode in {AudioMode.NO_AUDIO, AudioMode.MUSIC_ONLY}:
+                logging.getLogger(__name__).info(
+                    "[STUDIO][ITEM %s] Audio Intelligence=%s; RVC ignorado",
+                    item.content_id,
+                    audio_mode,
+                )
+                subprocess.run(
+                    [
+                        ffmpeg, "-y",
+                        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                        "-t", f"{duration:.3f}",
+                        "-ac", "2", "-ar", "44100",
+                        str(audio_rvc),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                extract_args = [
+                    ffmpeg, "-y", "-i", str(source), "-vn",
+                    "-ac", "2", "-ar", "44100",
+                ]
+                # Mixed speech+music gets a speech-focused preconditioning pass
+                # before RVC. It is intentionally not described as perfect source
+                # separation; Studio still controls the final background music.
+                if audio_mode == AudioMode.SPEECH_PLUS_MUSIC:
+                    extract_args.extend([
+                        "-af",
+                        "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,highpass=f=100,lowpass=f=5000",
+                    ])
+                extract_args.append(str(audio_original))
+                subprocess.run(
+                    extract_args,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
 
-        from .processing.finalizer import finalizar
-        finalizar(source, audio_rvc, music, banner, output, position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"), intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0", plan=analysis.plan)
+                voice = os.getenv("ARMORED_STUDIO_RVC_VOICE", "melody")
+                logging.getLogger(__name__).info(
+                    "[STUDIO][ITEM %s] Audio Intelligence=%s; RVC iniciando voz=%s",
+                    item.content_id,
+                    audio_mode,
+                    voice,
+                )
+                from .processing.rvc import converter_voz
+                converter_voz(audio_original, audio_rvc, voice, item_id=item.content_id)
+                logging.getLogger(__name__).info(
+                    "[STUDIO][ITEM %s] RVC concluído",
+                    item.content_id,
+                )
 
-        for artifact in (audio_original, audio_rvc):
-            artifact.unlink(missing_ok=True)
+            from .processing.finalizer import finalizar
+            finalizar(
+                source,
+                audio_rvc,
+                music,
+                banner,
+                output,
+                position=os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final"),
+                intro=os.getenv("ARMORED_STUDIO_INTRO", "1") != "0",
+                plan=analysis.plan,
+            )
+        finally:
+            for artifact in (audio_original, audio_rvc):
+                artifact.unlink(missing_ok=True)
 
         if not output.is_file() or output.stat().st_size <= 0:
             raise RuntimeError("Studio produziu uma saída inválida")
