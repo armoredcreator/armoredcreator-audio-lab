@@ -15,12 +15,6 @@ class StartupReconciler:
         self.publisher = publisher
         self.log = logging.getLogger(__name__)
 
-    def _workspace(self, item) -> object:
-        return self.storage.workspace(
-            item.telegram_message_id,
-            source_id=item.source_id,
-        )
-
     def _configured_source_roots(self) -> list[tuple[str, object]]:
         roots: list[tuple[str, object]] = []
         for candidate in range(1, 100):
@@ -57,9 +51,9 @@ class StartupReconciler:
         for row in rows:
             item_id = str(row["content_id"])
             source_id = str(row["source_id"] or "telegram")
-            workspace = self.storage.workspace(
-                row["telegram_message_id"],
-                source_id=source_id,
+            workspace = (
+                self.storage.source_workspace_root(source_id)
+                / str(row["telegram_message_id"]).strip()
             )
             files = (
                 sorted(p.name for p in workspace.iterdir() if p.is_file())
