@@ -258,6 +258,41 @@ class SyncLifecycleTests(unittest.TestCase):
         assert candidates[1][4] == "https://s.shopee.com.br/recent-group"
 
 
+    def test_historical_candidate_interleaves_topics_instead_of_monopolizing_one(self):
+        source = CandidateSource(Path("."), FakeReader())
+        consumed = {"slow": 0, "fast": 0}
+
+        async def topic_messages(source_name, topic_id):
+            if topic_id == 10:
+                for message_id in range(1000, 1200):
+                    consumed["slow"] += 1
+                    yield FakeMessage(message_id, video=False)
+            else:
+                consumed["fast"] += 1
+                yield FakeMessage(202, video=True, grouped_id=7777)
+                consumed["fast"] += 1
+                yield FakeMessage(201, grouped_id=7777)
+                consumed["fast"] += 1
+                yield FakeMessage(200, text="https://s.shopee.com.br/fast", grouped_id=7777)
+
+        source._topic_messages = topic_messages
+        candidates = []
+
+        async def collect_one():
+            iterator = source._candidate_iterator(
+                "source",
+                [(10, "slow"), (20, "fast")],
+            )
+            candidates.append(await iterator.__anext__())
+
+        asyncio.run(collect_one())
+
+        assert candidates[0][0] == 202
+        assert candidates[0][4] == "https://s.shopee.com.br/fast"
+        assert consumed["fast"] == 3
+        assert consumed["slow"] <= 3
+
+
     def test_historical_candidate_resolves_shopee_from_same_grouped_album(self):
         source = CandidateSource(Path("."), FakeReader())
         source._topic_messages = None
