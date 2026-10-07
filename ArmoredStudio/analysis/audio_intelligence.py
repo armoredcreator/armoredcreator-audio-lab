@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from dataclasses import dataclass
@@ -132,7 +131,7 @@ class AudioIntelligence:
                 0.40 * (1.0 if 250.0 <= centroid <= 3200.0 else 0.0)
                 + 0.25 * (1.0 if 0.025 <= zcr <= 0.22 else 0.0)
                 + 0.20 * (1.0 if 0.45 <= band_energy <= 0.98 else 0.0)
-                + 0.15 * (1.0 if flatness >= 0.08 else 0.0)
+                + 0.15 * (1.0 if flatness >= 0.12 else 0.0)
             )
 
             # Music evidence is strongest for sustained harmonic/tonal energy.
