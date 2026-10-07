@@ -304,7 +304,7 @@ class Coordinator:
                 topic_id = getattr(message, "topic_id", None)
                 commit = getattr(source, "commit_live_checkpoints", None)
                 if topic_id is not None and commit is not None:
-                    commit({int(topic_id): int(item_id)})
+                    commit({int(topic_id): int(message.telegram_message_id)})
                 continue
 
             materialized = False
