@@ -535,140 +535,183 @@ class TelegramSource:
 
         return []
 
-    def _window_candidates(
-        self,
-        messages: list[Any],
-        topic_id: int,
-        topic_name: str,
-    ) -> list[tuple[int, int, str, Any, str]]:
-        """Apply the canonical candidate rules to a bounded recent window.
+    async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
+        """Stream the canonical Source 1 candidate rules across all topics.
 
-        Discovery is identical for every source. This is only a bounded
-        accelerator before the full historical scan.
+        Each topic keeps its own pending video/group state, but scanning is
+        interleaved in small quanta. This prevents one very large forum topic
+        from monopolizing CATCH-UP while another topic may contain an eligible
+        video+link album near its head. No source-specific candidate rules are
+        introduced: both sources use this same detector.
         """
-        candidates: list[tuple[int, int, str, Any, str]] = []
-        grouped: dict[int, list[Any]] = {}
-        grouped_message_ids: set[int] = set()
+        if not topics:
+            return
 
-        for message in messages:
-            grouped_id = getattr(message, "grouped_id", None)
-            if grouped_id is None:
-                continue
-            group_id = int(grouped_id)
-            grouped.setdefault(group_id, []).append(message)
-            message_id = int(getattr(message, "id", 0) or 0)
-            if message_id > 0:
-                grouped_message_ids.add(message_id)
-
-        for group in grouped.values():
-            for candidate in self._grouped_candidates(group, topic_id, topic_name):
-                candidate_id = int(candidate[0])
-                if candidate_id in self._seen or candidate_id in self._discovered:
-                    continue
-                self._discovered.add(candidate_id)
-                candidates.append(candidate)
-
-        for index, message in enumerate(messages):
-            message_id = int(getattr(message, "id", 0) or 0)
-            if message_id <= 0 or message_id in grouped_message_ids:
-                continue
-
-            current_url = self._shopee_url(message)
-            current_is_video = bool(getattr(message, "video", None))
-
-            if current_is_video and current_url:
-                if (
-                    not self._shopee_url_exists(current_url)
-                    and message_id not in self._seen
-                    and message_id not in self._discovered
-                ):
-                    self._discovered.add(message_id)
-                    candidates.append(
-                        (message_id, topic_id, topic_name, message, current_url)
-                    )
-                continue
-
-            if index + 1 >= len(messages):
-                continue
-
-            next_message = messages[index + 1]
-            next_grouped = getattr(next_message, "grouped_id", None)
-            if next_grouped is not None:
-                continue
-
-            next_is_video = bool(getattr(next_message, "video", None))
-            next_url = self._shopee_url(next_message)
-
-            # History is newest-first. Therefore:
-            #   VIDEO -> LINK chronologically appears as LINK -> VIDEO here.
-            if (
-                not current_is_video
-                and current_url
-                and next_is_video
-                and not self._shopee_url_exists(current_url)
-            ):
-                next_id = int(getattr(next_message, "id", 0) or 0)
-                if (
-                    next_id > 0
-                    and next_id not in self._seen
-                    and next_id not in self._discovered
-                ):
-                    self._discovered.add(next_id)
-                    candidates.append(
-                        (next_id, topic_id, topic_name, next_message, current_url)
-                    )
-                continue
-
-            # The opposite chronological form LINK -> VIDEO appears as
-            # VIDEO -> LINK in newest-first history.
-            if (
-                current_is_video
-                and not current_url
-                and next_url
-                and not self._shopee_url_exists(next_url)
-                and message_id not in self._seen
-                and message_id not in self._discovered
-            ):
-                self._discovered.add(message_id)
-                candidates.append(
-                    (message_id, topic_id, topic_name, message, next_url)
-                )
-
-        return candidates
-
-    async def _recent_candidates(
-        self,
-        source: str,
-        topics: list[tuple[int, str]],
-    ):
         try:
-            scan_limit = max(
-                20,
-                int(os.getenv("ARMORED_CATCHUP_RECENT_SCAN_LIMIT", "100")),
+            quantum = max(
+                1,
+                int(os.getenv("ARMORED_CATCHUP_TOPIC_QUANTUM", "10")),
             )
         except ValueError:
-            scan_limit = 100
+            quantum = 10
 
-        for topic_id, topic_name in topics:
-            messages = []
-            async for message in self.reader.client.iter_messages(
-                source,
-                reply_to=int(topic_id),
-                limit=scan_limit,
-            ):
-                messages.append(message)
+        iterators = {
+            int(topic_id): self._topic_messages(source, int(topic_id)).__aiter__()
+            for topic_id, _topic_name in topics
+        }
+        states = {
+            int(topic_id): {
+                "topic_name": topic_name,
+                "pending_video": None,
+                "pending_group_id": None,
+                "pending_group": [],
+                "topic_max_id": 0,
+            }
+            for topic_id, topic_name in topics
+        }
+        active = [int(topic_id) for topic_id, _topic_name in topics]
+        cursor = 0
 
-            candidates = self._window_candidates(
-                messages,
-                int(topic_id),
-                topic_name,
-            )
-            print(
-                f"[SYNC][PROBE] source={source} topic={topic_id} "
-                f"messages={len(messages)} candidates={len(candidates)}"
-            )
-            for candidate in candidates:
-                yield candidate
+        async def emit_group(topic_id: int):
+            state = states[topic_id]
+            group = state["pending_group"]
+            if group:
+                for candidate in self._grouped_candidates(
+                    group,
+                    topic_id,
+                    state["topic_name"],
+                ):
+                    yield candidate
+            state["pending_group_id"] = None
+            state["pending_group"] = []
+
+        async def finalize_topic(topic_id: int):
+            state = states[topic_id]
+            if state["pending_group"]:
+                async for candidate in emit_group(topic_id):
+                    yield candidate
+
+            pending_video = state["pending_video"]
+            if pending_video is not None:
+                pending_id, pending_message = pending_video
+                original_url = self._shopee_url(pending_message)
+                if (
+                    pending_id not in self._seen
+                    and original_url is not None
+                    and not self._shopee_url_exists(original_url)
+                ):
+                    yield (
+                        pending_id,
+                        topic_id,
+                        state["topic_name"],
+                        pending_message,
+                        original_url,
+                    )
+                state["pending_video"] = None
+
+            if state["topic_max_id"]:
+                self._historical_checkpoints[topic_id] = state["topic_max_id"]
+
+        while active:
+            topic_id = active[cursor % len(active)]
+            cursor = (cursor + 1) % len(active)
+            iterator = iterators[topic_id]
+            state = states[topic_id]
+
+            for _ in range(quantum):
+                try:
+                    message = await iterator.__anext__()
+                except StopAsyncIteration:
+                    async for candidate in finalize_topic(topic_id):
+                        yield candidate
+                    active.remove(topic_id)
+                    if active:
+                        cursor %= len(active)
+                    break
+
+                message_id = int(getattr(message, "id", 0) or 0)
+                if message_id > state["topic_max_id"]:
+                    state["topic_max_id"] = message_id
+                if message_id <= 0:
+                    continue
+
+                grouped_id = getattr(message, "grouped_id", None)
+                if grouped_id is not None:
+                    grouped_id = int(grouped_id)
+                    if state["pending_group_id"] is None:
+                        pending_video = state["pending_video"]
+                        if pending_video is not None:
+                            pending_id, pending_message = pending_video
+                            original_url = self._shopee_url(pending_message)
+                            if (
+                                pending_id not in self._seen
+                                and original_url is not None
+                                and not self._shopee_url_exists(original_url)
+                            ):
+                                yield (
+                                    pending_id,
+                                    topic_id,
+                                    state["topic_name"],
+                                    pending_message,
+                                    original_url,
+                                )
+                            state["pending_video"] = None
+                        state["pending_group_id"] = grouped_id
+                        state["pending_group"] = [message]
+                    elif grouped_id == state["pending_group_id"]:
+                        state["pending_group"].append(message)
+                    else:
+                        async for candidate in emit_group(topic_id):
+                            yield candidate
+                        state["pending_group_id"] = grouped_id
+                        state["pending_group"] = [message]
+                    continue
+
+                if state["pending_group"]:
+                    async for candidate in emit_group(topic_id):
+                        yield candidate
+
+                pending_video = state["pending_video"]
+                if pending_video is not None:
+                    if not getattr(message, "video", None):
+                        original_url = self._shopee_url(message)
+                        if (
+                            pending_video[0] not in self._seen
+                            and original_url is not None
+                            and not self._shopee_url_exists(original_url)
+                        ):
+                            yield (
+                                pending_video[0],
+                                topic_id,
+                                state["topic_name"],
+                                pending_video[1],
+                                original_url,
+                            )
+                    state["pending_video"] = None
+
+                if not getattr(message, "video", None):
+                    continue
+
+                original_url = self._shopee_url(message)
+                if original_url is not None:
+                    if (
+                        message_id not in self._seen
+                        and not self._shopee_url_exists(original_url)
+                    ):
+                        yield (
+                            message_id,
+                            topic_id,
+                            state["topic_name"],
+                            message,
+                            original_url,
+                        )
+                    continue
+
+                state["pending_video"] = (message_id, message)
+            else:
+                continue
+
+        return
 
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
         """Stream the canonical candidates while interleaving forum topics.
