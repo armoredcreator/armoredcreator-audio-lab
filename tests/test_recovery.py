@@ -301,7 +301,7 @@ class RecoveryTests(unittest.TestCase):
         source_id = "-1002698134896"
         from unittest.mock import patch
 
-        with patch.dict(
+        patcher = patch.dict(
             "os.environ",
             {
                 "ARMORED_SOURCE_2_ID": source_id,
@@ -309,24 +309,27 @@ class RecoveryTests(unittest.TestCase):
                 "ARMORED_SOURCE_2_VIDEO_DIR": "Videos GRUPO_FONTE_2",
             },
             clear=False,
-        ):
-            item_id = self.db.content_id_for("77", source_id)
-            original = self.storage.original(
-                item_id,
-                original_url="https://shopee.com.br/77",
-                source_id=source_id,
-            )
-            original.write_bytes(b"SOURCE2-ORIGINAL")
-            item_id = self.db.create_item(
-                "77",
-                original,
-                source_id=source_id,
-                topic_id=1160,
-                topic_name="source2",
-                original_url="https://shopee.com.br/77",
-            )
-            self.db.set_vision(item_id, "recover-final", "https://example.invalid/a")
-            self.db.transition(item_id, State.RECOVERY, "source2-test")
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        item_id = self.db.content_id_for("77", source_id)
+        original = self.storage.original(
+            item_id,
+            original_url="https://shopee.com.br/77",
+            source_id=source_id,
+        )
+        original.write_bytes(b"SOURCE2-ORIGINAL")
+        item_id = self.db.create_item(
+            "77",
+            original,
+            source_id=source_id,
+            topic_id=1160,
+            topic_name="source2",
+            original_url="https://shopee.com.br/77",
+        )
+        self.db.set_vision(item_id, "recover-final", "https://example.invalid/a")
+        self.db.transition(item_id, State.RECOVERY, "source2-test")
 
         class Source2Studio:
             def __init__(self, storage):
