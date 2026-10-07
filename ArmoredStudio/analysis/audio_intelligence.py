@@ -139,6 +139,11 @@ class AudioIntelligence:
             )
 
             # Music evidence is strongest for sustained harmonic/tonal energy.
+            if bandwidth < 250.0:
+                speech_score *= 0.45
+            if flatness < 0.05:
+                speech_score *= 0.55
+
             music_score = (
                 0.45 * (1.0 if flatness < 0.20 else 0.0)
                 + 0.30 * (1.0 if 500.0 <= centroid <= 7000.0 else 0.0)
