@@ -423,7 +423,7 @@ async def main_async() -> int:
                 coordinator1.close()
 
             print(
-                "\n[2/3] SOURCE 2 - procurar candidato real SEM NARRAÇÃO "
+                "\n[2/3] SOURCE 2 - procurar MUSIC_ONLY + NO_AUDIO "
                 "sem baixar antes da Vision"
             )
             coordinator2 = _build_runtime(
@@ -466,6 +466,10 @@ async def main_async() -> int:
                     if all(targets.values()):
                         break
 
+                    print(
+                        f"[CERT][AUDIO-SCAN] procurando candidato "
+                        f"{attempt}/{audio_limit}..."
+                    )
                     message = await _discover_unprocessed(
                         coordinator2.source,
                         prod_conn,
@@ -565,7 +569,7 @@ async def main_async() -> int:
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
     print("PASS: Source 1 SPEECH/SPEECH_PLUS_MUSIC publicado e confirmado no tópico 228.")
     print("PASS: Source 2 MUSIC_ONLY e NO_AUDIO publicados e confirmados no tópico 1160.")
-    print("PASS: vídeo sem narração não chamou RVC e mutou o áudio original.")
+    print("PASS: MUSIC_ONLY e NO_AUDIO não chamaram RVC e removeram o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
     return 0
