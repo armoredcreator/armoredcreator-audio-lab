@@ -146,6 +146,8 @@ def test_unresolved_vision_never_materializes(tmp_path, monkeypatch):
 
 
 def test_music_only_studio_mutes_original_audio_and_skips_rvc(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_2_VIDEO_DIR", "Videos GRUPO_FONTE_2")
     import ArmoredStudio.processing.finalizer as finalizer_module
     import ArmoredStudio.processing.rvc as rvc_module
     import ArmoredStudio.unified as unified_module
