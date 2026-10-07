@@ -15,6 +15,7 @@ LEGACY_STORAGE_DIRS = {
     "storage/generated",
     "storage/rejected",
     "storage/archive",
+    "storage/sources",
 }
 
 PRODUCTION_DIRS = (
