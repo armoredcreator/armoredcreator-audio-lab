@@ -247,6 +247,14 @@ class StartupAuditTests(unittest.TestCase):
                     original_url="https://shopee.com.br/823",
                 )
                 db.set_vision(item_id, "produto", "https://shopee.com.br/823")
+                durable_result = storage.result(
+                    item_id,
+                    "https://shopee.com.br/823",
+                    "produto",
+                    source_id="-1002698134896",
+                )
+                durable_result.write_bytes(b"FINAL-RESULT")
+                self.assertTrue(durable_result.is_file())
                 db.publication_started(
                     item_id,
                     destination_chat_id="-1004341972306",
@@ -267,7 +275,7 @@ class StartupAuditTests(unittest.TestCase):
                     source_id="-1002698134896",
                 )
                 self.assertEqual(db.get(item_id).state, State.RECOVERY)
-                self.assertFalse(expected.is_file())
+                self.assertTrue(expected.is_file())
                 self.assertEqual(summary["pending"], 1)
                 db.close()
             finally:
