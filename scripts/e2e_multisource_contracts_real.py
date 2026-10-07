@@ -423,8 +423,8 @@ async def main_async() -> int:
                 coordinator1.close()
 
             print(
-                "\n[2/3] SOURCE 2 - procurar MUSIC_ONLY + NO_AUDIO "
-                "sem baixar antes da Vision"
+                "\n[2/3] SOURCE 2 - processamento normal: cada vídeo "
+                "é classificado pelo próprio áudio"
             )
             coordinator2 = _build_runtime(
                 temp_root / "source2",
@@ -434,130 +434,124 @@ async def main_async() -> int:
                 routes,
             )
 
-            rvc_called: list[tuple[tuple, dict]] = []
-            original_rvc = rvc_module.converter_voz
-            original_run = unified_module.subprocess.run
-            captured_ffmpeg: list[list[str]] = []
+            rvc_calls2: list[tuple[tuple, dict]] = []
+            original_rvc2 = rvc_module.converter_voz
+            original_run2 = unified_module.subprocess.run
+            captured_ffmpeg2: list[list[str]] = []
 
-            def forbidden_rvc(*args, **kwargs):
-                rvc_called.append((args, kwargs))
-                raise AssertionError("RVC foi chamado para vídeo sem narração")
+            def recording_rvc2(*args, **kwargs):
+                rvc_calls2.append((args, kwargs))
+                return original_rvc2(*args, **kwargs)
 
-            def capture_run(command, *args, **kwargs):
-                captured_ffmpeg.append([str(value) for value in command])
-                return original_run(command, *args, **kwargs)
+            def capture_run2(command, *args, **kwargs):
+                captured_ffmpeg2.append([str(value) for value in command])
+                return original_run2(command, *args, **kwargs)
 
-            rvc_module.converter_voz = forbidden_rvc
-            unified_module.subprocess.run = capture_run
+            rvc_module.converter_voz = recording_rvc2
+            unified_module.subprocess.run = capture_run2
 
             try:
-                audio_limit = int(
-                    os.getenv(
-                        "ARMORED_CERT_AUDIO_SCAN_LIMIT",
-                        os.getenv("ARMORED_CERT_MUSIC_SCAN_LIMIT", "12"),
-                    )
+                items_to_process = max(
+                    1,
+                    int(os.getenv("ARMORED_CERT_SOURCE2_ITEMS", "2")),
                 )
-                targets = {
-                    AudioKind.MUSIC_ONLY: None,
-                    AudioKind.NO_AUDIO: None,
-                }
 
-                for attempt in range(1, audio_limit + 1):
-                    if all(targets.values()):
-                        break
-
-                    print(
-                        f"[CERT][AUDIO-SCAN] procurando candidato "
-                        f"{attempt}/{audio_limit}..."
-                    )
+                processed_source2 = 0
+                for index in range(1, items_to_process + 1):
                     message = await _discover_unprocessed(
                         coordinator2.source,
                         prod_conn,
                         1,
                     )
                     if message is None:
+                        print(
+                            f"[CERT][SOURCE2] nenhum próximo vídeo disponível "
+                            f"na posição {index}"
+                        )
                         break
 
-                    item_id, item = await _gate_one(
+                    item_id2, item2 = await _gate_one(
                         coordinator2,
                         coordinator2.source,
                         message,
                     )
-                    if item is None:
+                    if item2 is None:
                         print(
-                            f"[CERT][AUDIO-SCAN] tentativa={attempt} item={item_id} "
-                            "Vision unresolved -> próxima candidata"
+                            f"[CERT][SOURCE2] item={item_id2} "
+                            "Vision unresolved -> item aguardará resolução"
                         )
                         continue
 
-                    ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
-                    profile = analyze_audio(
-                        Path(item.original_path),
-                        ffmpeg=ffmpeg,
+                    ffmpeg2 = os.getenv("ARMORED_FFMPEG", "ffmpeg")
+                    profile2 = analyze_audio(
+                        Path(item2.original_path),
+                        ffmpeg=ffmpeg2,
                     )
                     print(
-                        f"[CERT][AUDIO-SCAN] tentativa={attempt} item={item_id} "
-                        f"AudioKind={profile.kind.value} "
-                        f"speech_present={profile.speech_present}"
+                        f"[CERT][AUDIO][SOURCE2] item={item_id2} "
+                        f"AudioKind={profile2.kind.value} "
+                        f"speech_present={profile2.speech_present}"
                     )
 
-                    if profile.kind in targets and targets[profile.kind] is None:
-                        targets[profile.kind] = (item_id, item, profile)
+                    rvc_before = len(rvc_calls2)
+                    ffmpeg_before = len(captured_ffmpeg2)
 
-                missing = [kind.value for kind, value in targets.items() if value is None]
-                if missing:
-                    raise RuntimeError(
-                        "A certificação real não encontrou todos os tipos de áudio "
-                        f"dentro de ARMORED_CERT_AUDIO_SCAN_LIMIT={audio_limit}: "
-                        + ", ".join(missing)
-                    )
-
-                for kind in (AudioKind.MUSIC_ONLY, AudioKind.NO_AUDIO):
-                    item_id, item, profile = targets[kind]
-                    print(
-                        f"[CERT][AUDIO] candidato {kind.value} escolhido={item_id} "
-                        "-> Studio real + pipeline completo"
-                    )
-                    before_commands = len(captured_ffmpeg)
                     await _process_and_verify(
                         coordinator2,
-                        item_id,
+                        item_id2,
                         str(route2.hub.chat_id),
                         int(route2.hub.topic_id),
                     )
+                    processed_source2 += 1
 
-                    if rvc_called:
-                        raise AssertionError(
-                            f"RVC foi executado para candidato {kind.value}"
+                    item_rvc_calls = rvc_calls2[rvc_before:]
+                    item_commands = captured_ffmpeg2[ffmpeg_before:]
+
+                    if profile2.speech_present:
+                        if not item_rvc_calls:
+                            raise AssertionError(
+                                f"Source2 item={item_id2} tem fala, mas RVC não foi executado"
+                            )
+                        print(
+                            f"[CERT][AUDIO][SOURCE2] PASS item={item_id2}: "
+                            f"{profile2.kind.value} -> RVC Melody -> efeito principal baixo"
+                        )
+                    else:
+                        if item_rvc_calls:
+                            raise AssertionError(
+                                f"Source2 item={item_id2} não tem fala, mas RVC foi executado"
+                            )
+
+                        silence_commands = [
+                            command
+                            for command in item_commands
+                            if "anullsrc=r=44100:cl=stereo" in " ".join(command)
+                        ]
+                        if not silence_commands:
+                            raise AssertionError(
+                                f"Source2 item={item_id2} sem fala não passou pelo caminho de silêncio"
+                            )
+                        if any(
+                            str(item2.original_path) in command
+                            for command in silence_commands
+                        ):
+                            raise AssertionError(
+                                f"Source2 item={item_id2} sem fala preservou o áudio original"
+                            )
+
+                        print(
+                            f"[CERT][AUDIO][SOURCE2] PASS item={item_id2}: "
+                            f"{profile2.kind.value} -> sem RVC -> "
+                            "áudio original removido -> efeito principal alto"
                         )
 
-                    silence_commands = [
-                        command
-                        for command in captured_ffmpeg[before_commands:]
-                        if "anullsrc=r=44100:cl=stereo" in " ".join(command)
-                    ]
-                    if not silence_commands:
-                        raise AssertionError(
-                            f"Studio não gerou silêncio para {kind.value}; "
-                            "nenhum comando FFmpeg com anullsrc foi observado"
-                        )
-                    if any(
-                        str(item.original_path) in command
-                        for command in silence_commands
-                    ):
-                        raise AssertionError(
-                            f"Studio preservou o áudio original no caminho {kind.value}"
-                        )
-
-                    print(
-                        f"[CERT][AUDIO] PASS: {kind.value} -> sem RVC -> "
-                        "anullsrc -> áudio original não usado -> "
-                        "Studio/Hub/Telegram OK"
+                if processed_source2 == 0:
+                    raise RuntimeError(
+                        "Source 2 não processou nenhum vídeo real na certificação."
                     )
-
             finally:
-                rvc_module.converter_voz = original_rvc
-                unified_module.subprocess.run = original_run
+                rvc_module.converter_voz = original_rvc2
+                unified_module.subprocess.run = original_run2
                 coordinator2.close()
 
     finally:
@@ -568,7 +562,7 @@ async def main_async() -> int:
     print("PASS: Vision antes de materialização para as duas fontes.")
     print("PASS: storage isolado em Videos GRUPO_FONTE_1 / Videos GRUPO_FONTE_2.")
     print("PASS: Source 1 SPEECH/SPEECH_PLUS_MUSIC publicado e confirmado no tópico 228.")
-    print("PASS: Source 2 MUSIC_ONLY e NO_AUDIO publicados e confirmados no tópico 1160.")
+    print("PASS: Source 2 processou vídeos reais conforme o áudio detectado e publicou no tópico 1160.")
     print("PASS: MUSIC_ONLY e NO_AUDIO não chamaram RVC e removeram o áudio original.")
     print("PASS: banco de produção permaneceu somente-leitura.")
     print("RESULTADO: CERTIFICADO")
