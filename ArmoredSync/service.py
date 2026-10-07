@@ -293,22 +293,79 @@ class TelegramSource:
         return row is not None
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
+        """Return every forum topic, paginating large forums safely.
+
+        Telegram returns forum topics in pages. A large Source 2 can have
+        considerably more than 100 topics, so a single request is not a
+        complete historical source and can silently hide older candidates.
+        """
         from telethon import functions
-        result = await self.reader.client(
-            functions.messages.GetForumTopicsRequest(
-                peer=source,
-                q=None,
-                offset_date=None,
-                offset_id=0,
-                offset_topic=0,
-                limit=100,
-            )
-        )
+
         topics: list[tuple[int, str]] = []
-        for topic in getattr(result, "topics", []) or []:
-            topic_id = getattr(topic, "id", None)
-            if topic_id is not None:
-                topics.append((int(topic_id), str(getattr(topic, "title", None) or topic_id).strip()))
+        seen_topics: set[int] = set()
+        offset_date = 0
+        offset_id = 0
+        offset_topic = 0
+
+        while True:
+            result = await self.reader.client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=source,
+                    q=None,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100,
+                )
+            )
+            page = []
+            for topic in getattr(result, "topics", []) or []:
+                topic_id = getattr(topic, "id", None)
+                if topic_id is None:
+                    continue
+                topic_id = int(topic_id)
+                if topic_id in seen_topics:
+                    continue
+                seen_topics.add(topic_id)
+                title = str(getattr(topic, "title", None) or topic_id).strip()
+                topics.append((topic_id, title))
+                page.append(topic)
+
+            total = int(getattr(result, "count", 0) or 0)
+            print(
+                f"[SYNC][TOPICS] source={source} "
+                f"page={len(page)} total={total or '?'} collected={len(topics)}"
+            )
+
+            if not page or (total and len(topics) >= total):
+                break
+
+            last = page[-1]
+            last_topic = int(getattr(last, "id", 0) or 0)
+            last_top_message = int(getattr(last, "top_message", 0) or 0)
+            if last_topic <= 0:
+                break
+
+            message_dates = {
+                int(getattr(message, "id", 0) or 0): getattr(message, "date", None)
+                for message in getattr(result, "messages", []) or []
+            }
+            last_date = message_dates.get(last_top_message)
+            if last_date is None:
+                last_date = getattr(last, "date", None)
+
+            if last_date is None:
+                next_offset_date = 0
+            else:
+                next_offset_date = int(last_date.timestamp())
+
+            next_cursor = (next_offset_date, last_top_message, last_topic)
+            current_cursor = (offset_date, offset_id, offset_topic)
+            if next_cursor == current_cursor:
+                break
+
+            offset_date, offset_id, offset_topic = next_cursor
+
         return topics
 
     async def _topic_messages(self, source: str, topic_id: int):
