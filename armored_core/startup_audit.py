@@ -17,10 +17,10 @@ class StartupReconciler:
 
     def run(self) -> dict:
         rows = self.db.conn.execute(
-            "SELECT content_id,state,source_id,original_path,working_path,result_path,"
+            "SELECT content_id,telegram_message_id,state,source_id,original_path,working_path,result_path,"
             "cleanup_completed FROM items ORDER BY created_at,content_id"
         ).fetchall()
-        db_ids = {str(row["content_id"]) for row in rows}
+        expected_workspaces: set[Path] = set()
         summary = {
             "items": len(rows), "published": 0, "pending": 0, "failed": 0,
             "clean": 0, "storage_workspaces": 0, "orphans": [],
@@ -136,7 +136,7 @@ class StartupReconciler:
             if not video_root.is_dir():
                 continue
             for workspace in sorted(video_root.iterdir()):
-                if not workspace.is_dir() or workspace.name in db_ids:
+                if not workspace.is_dir() or workspace.resolve() in expected_workspaces:
                     continue
                 if video_root == self.storage.videos:
                     orphan_label = workspace.name
