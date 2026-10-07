@@ -294,32 +294,46 @@ class TelegramSource:
             (str(self.source_id or "telegram"), str(original_url)),
         ).fetchall()
 
+        recoverable = False
+        represented = False
+
         for row in rows:
             state = str(row["state"] or "")
-            if state == "PUBLISHED" and bool(row["cleanup_completed"]):
-                return True
-
             stored_path = str(row["original_path"] or "").strip()
+
+            # Any safely represented item suppresses rediscovery. This check
+            # is intentionally performed across all matching rows before
+            # considering an incomplete recovery row, so one failed attempt
+            # cannot hide a separately completed publication.
+            if state == "PUBLISHED" and bool(row["cleanup_completed"]):
+                represented = True
+                break
+
             if stored_path:
                 try:
                     if Path(stored_path).is_file():
-                        return True
+                        represented = True
+                        break
                 except OSError:
                     pass
 
-            # Coordinator's durable source-rediscovery contract explicitly
-            # includes RECOVERY and pre-download RECEIVED/VISION items whose
-            # Vision evidence exists but whose ORIGINAL is missing.
-            if state in {"RECOVERY", "RECEIVED", "VISION"} and str(row["affiliate_url"] or "").strip():
-                return False
+            # These are the only historical states that the Coordinator can
+            # intentionally rediscover: a technical recovery or a pre-download
+            # item that already contains durable Vision evidence.
+            if state == "RECOVERY":
+                recoverable = True
+                continue
+            if state in {"RECEIVED", "VISION"} and str(row["affiliate_url"] or "").strip():
+                recoverable = True
+                continue
 
-            # WAITING_VISION is a durable classification, not a technical
-            # failure. Do not keep rediscovering it just because its ORIGINAL
-            # does not exist.
-            if state == "WAITING_VISION":
-                return True
+            # WAITING_VISION and every other durable/non-recoverable row still
+            # represent a known URL. They must not create a second candidate.
+            return True
 
-        return False
+        if represented:
+            return True
+        return not recoverable
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
         from telethon import functions
