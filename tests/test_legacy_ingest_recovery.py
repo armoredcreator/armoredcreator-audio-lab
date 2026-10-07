@@ -20,8 +20,7 @@ class LegacyIngestRecoveryTests(unittest.TestCase):
                 original_path=Path(""),
             )
 
-            stale = storage.videos / "544" / "544_5AqOWAutYS.mp4.part"
-            stale.parent.mkdir(parents=True, exist_ok=True)
+            stale = storage.workspace("544", source_id="telegram") / "544_5AqOWAutYS.mp4.part"
             stale.write_bytes(b"stale-partial")
 
             calls = []

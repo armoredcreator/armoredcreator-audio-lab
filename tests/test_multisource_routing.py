@@ -205,14 +205,14 @@ def test_recovery_item_is_not_hidden_by_source_scoped_url_dedup(tmp_path: Path):
     db = Database(tmp_path / "db.sqlite")
     url = "https://shopee.com.br/product/recover-me"
     source = "-1003788989075"
-    db.reserve_item(
+    item_id = db.reserve_item(
         "99",
         source_id=source,
         original_url=url,
         original_path=tmp_path / "missing.mp4",
     )
-    db.set_vision("99", "produto", "https://shopee.com.br/product/affiliate")
-    db.transition("99", State.RECOVERY, "download-timeout")
+    db.set_vision(item_id, "produto", "https://shopee.com.br/product/affiliate")
+    db.transition(item_id, State.RECOVERY, "download-timeout")
 
     telegram = TelegramSource(
         tmp_path,
@@ -229,14 +229,14 @@ def test_completed_item_still_suppresses_source_scoped_url_dedup(tmp_path: Path)
     db = Database(tmp_path / "db.sqlite")
     url = "https://shopee.com.br/product/completed"
     source = "-1003788989075"
-    db.reserve_item(
+    item_id = db.reserve_item(
         "100",
         source_id=source,
         original_url=url,
         original_path=tmp_path / "missing.mp4",
     )
-    db.transition("100", State.PUBLISHED, "publication-confirmed")
-    db.mark_cleanup_completed("100")
+    db.transition(item_id, State.PUBLISHED, "publication-confirmed")
+    db.mark_cleanup_completed(item_id)
 
     telegram = TelegramSource(
         tmp_path,
