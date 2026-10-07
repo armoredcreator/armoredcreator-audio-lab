@@ -101,6 +101,68 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
     assert hub._destination_for(item) == ("-1004341972306", 1160)
 
 
+
+def test_multi_source_historical_catchup_alternates_sources():
+    class FakeHistoricalSource:
+        def __init__(self, source_id, ids):
+            self.source_id = source_id
+            self.ids = iter(ids)
+            self.historical_materialization_failed = False
+            self.historical_scan_exhausted = False
+            self.historical_limit_reached = False
+            self.historical_collection_limited = False
+            self.complete = False
+
+        def is_historical_complete(self):
+            return self.complete
+
+        async def fetch_next_async(self):
+            try:
+                message_id = next(self.ids)
+            except StopIteration:
+                self.historical_scan_exhausted = True
+                self.complete = True
+                return None
+            return SimpleNamespace(
+                telegram_message_id=str(message_id),
+                source_id=self.source_id,
+                topic_id=1,
+                topic_name=self.source_id,
+                original_url=f"https://shopee.com.br/{message_id}",
+            )
+
+        def complete_historical_sync(self):
+            self.complete = True
+
+        def reset_historical_scan(self):
+            pass
+
+    wrapper = MultiTelegramSource.__new__(MultiTelegramSource)
+    wrapper.db = SimpleNamespace(all_sources_historical_complete=lambda ids: False)
+    wrapper.routes = (
+        SimpleNamespace(source=SimpleNamespace(source_id="s1")),
+        SimpleNamespace(source=SimpleNamespace(source_id="s2")),
+    )
+    wrapper.sources = (
+        FakeHistoricalSource("s1", [11, 13]),
+        FakeHistoricalSource("s2", [22, 24]),
+    )
+    wrapper._cursor = 0
+    wrapper._last_source = None
+    wrapper._pending_source = None
+    wrapper._pending_message = None
+    wrapper._pending_checkpoints = {}
+
+    import asyncio
+    seen = []
+    for _ in range(4):
+        message = asyncio.run(wrapper.fetch_next_async())
+        assert message is not None
+        seen.append((message.source_id, message.telegram_message_id))
+
+    assert seen == [("s1", "11"), ("s2", "22"), ("s1", "13"), ("s2", "24")]
+
+
 def test_multi_source_keeps_one_candidate_pending():
     class FakeSource:
         def __init__(self, source_id, message_id):
