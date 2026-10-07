@@ -294,6 +294,10 @@ class TelegramSource:
             (str(self.source_id or "telegram"), str(original_url)),
         ).fetchall()
 
+        # No durable row means this URL is new for this source.
+        if not rows:
+            return False
+
         recoverable = False
         represented = False
 
