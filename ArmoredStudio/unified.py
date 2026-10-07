@@ -82,7 +82,7 @@ class UnifiedStudio:
         if not original.is_file():
             raise FileNotFoundError(original)
 
-        output = self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name)
+        output = self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)
         if output.exists():
             output.unlink()
 
