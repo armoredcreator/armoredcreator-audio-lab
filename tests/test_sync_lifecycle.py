@@ -144,6 +144,60 @@ class SyncLifecycleTests(unittest.TestCase):
             self.assertEqual(db.sync_topic_checkpoint(10), 120)
             db.close()
 
+    def test_discover_topics_paginates_large_forum(self):
+        source = TelegramSource(Path("."), FakeReader())
+
+        class Topic:
+            def __init__(self, topic_id, title, top_message):
+                self.id = topic_id
+                self.title = title
+                self.top_message = top_message
+                self.date = None
+
+        class Message:
+            def __init__(self, message_id, date):
+                self.id = message_id
+                self.date = date
+
+        from datetime import datetime, timezone
+
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, request):
+                self.calls.append(request)
+                if len(self.calls) == 1:
+                    result = type("Result", (), {})()
+                    result.count = 101
+                    result.topics = [
+                        Topic(i, f"topic-{i}", 1000 + i)
+                        for i in range(1, 101)
+                    ]
+                    result.messages = [
+                        Message(1100, datetime(2026, 10, 1, tzinfo=timezone.utc))
+                    ]
+                    result.messages.extend(
+                        Message(1000 + i, datetime(2026, 9, 1, tzinfo=timezone.utc))
+                        for i in range(1, 101)
+                    )
+                    return result
+
+                result = type("Result", (), {})()
+                result.count = 101
+                result.topics = [Topic(101, "topic-101", 1101)]
+                result.messages = [
+                    Message(1101, datetime(2026, 8, 1, tzinfo=timezone.utc))
+                ]
+                return result
+
+        source.reader.client = Client()
+        topics = asyncio.run(source._discover_topics("source"))
+        assert len(topics) == 101
+        assert topics[-1] == (101, "topic-101")
+        assert len(source.reader.client.calls) == 2
+
+
     def test_historical_candidate_uses_immediately_following_non_video(self):
         source = CandidateSource(Path("."), FakeReader())
         candidates = []
