@@ -102,7 +102,7 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
 
 
 
-def test_multi_source_historical_catchup_alternates_sources():
+def test_multi_source_historical_catchup_is_sequential():
     class FakeHistoricalSource:
         def __init__(self, source_id, ids):
             self.source_id = source_id
@@ -160,7 +160,7 @@ def test_multi_source_historical_catchup_alternates_sources():
         assert message is not None
         seen.append((message.source_id, message.telegram_message_id))
 
-    assert seen == [("s1", "11"), ("s2", "22"), ("s1", "13"), ("s2", "24")]
+    assert seen == [("s1", "11"), ("s1", "13"), ("s2", "22"), ("s2", "24")]
 
 
 def test_multi_source_keeps_one_candidate_pending():
