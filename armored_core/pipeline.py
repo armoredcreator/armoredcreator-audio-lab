@@ -63,7 +63,7 @@ class Pipeline:
                 result = item.result_path
                 if not result and item.affiliate_url:
                     result = self.storage.result(
-                        item_id,
+                        item.telegram_message_id,
                         item.affiliate_url,
                         item.affiliate_name,
                         source_id=item.source_id,
