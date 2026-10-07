@@ -314,7 +314,9 @@ class Coordinator:
             ):
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
-                    marker(item_id)
+                    # Sync tracks Telegram message IDs, not the source-scoped
+                    # SQLite content ID used for multisource identity.
+                    marker(message_id)
 
                 # A previously completed item may be rediscovered after an
                 # earlier candidate was recovered. Its checkpoint is safe to
