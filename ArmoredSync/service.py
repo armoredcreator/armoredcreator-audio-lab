@@ -294,8 +294,10 @@ class TelegramSource:
             (str(self.source_id or "telegram"), str(original_url)),
         ).fetchall()
 
+        recoverable = False
         for row in rows:
             state = str(row["state"] or "")
+
             if state == "PUBLISHED" and bool(row["cleanup_completed"]):
                 return True
 
@@ -307,19 +309,20 @@ class TelegramSource:
                 except OSError:
                     pass
 
-            # Coordinator's durable source-rediscovery contract explicitly
-            # includes RECOVERY and pre-download RECEIVED/VISION items whose
-            # Vision evidence exists but whose ORIGINAL is missing.
-            if state in {"RECOVERY", "RECEIVED", "VISION"} and str(row["affiliate_url"] or "").strip():
-                return False
+            # Only an explicitly incomplete item with durable Vision evidence
+            # may reopen the URL identity for historical Recovery.
+            if state == "RECOVERY":
+                recoverable = True
+                continue
+            if state in {"RECEIVED", "VISION"} and str(row["affiliate_url"] or "").strip():
+                recoverable = True
+                continue
 
-            # WAITING_VISION is a durable classification, not a technical
-            # failure. Do not keep rediscovering it just because its ORIGINAL
-            # does not exist.
-            if state == "WAITING_VISION":
-                return True
+            # WAITING_VISION and ordinary reserved rows are durable discovery
+            # results, not technical download failures. They remain deduped.
+            return True
 
-        return False
+        return not recoverable
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
         from telethon import functions
