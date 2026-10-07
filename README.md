@@ -99,9 +99,25 @@ Ele guarda estado, eventos, tentativas, Recovery, checkpoints, contexto V1, cont
 
 ## 2.5 Workspace canônico
 
-Cada item usa storage/videos/{content_id}/.
+Cada fonte usa a mesma forma de workspace, isolada apenas pela pasta de mídia:
 
+~~~
+storage/
+├── Videos GRUPO_FONTE_1/
+│   └── {content_id}/
+│       ├── {content_id}_{produto}.mp4
+│       ├── {content_id}_.mp4
+│       └── {content_id}_{resultado}.mp4
+└── Videos GRUPO_FONTE_2/
+    └── {content_id}/
+        ├── {content_id}_{produto}.mp4
+        ├── {content_id}_.mp4
+        └── {content_id}_{resultado}.mp4
+~~~
+
+O SQLite permanece único e compartilhado. Não existe `storage/sources/`.
 O ORIGINAL é o artefato imutável de recuperação. Working e result são derivados.
+A pasta é determinada pelo `source_id`; o formato interno do workspace é o mesmo para todas as fontes.
 
 ## 2.6 Cleanup
 
@@ -175,7 +191,7 @@ Responsabilidades:
 
 A materialização permanece canônica em `storage/videos/{content_id}/`.
 
-## 4.1 Regra de candidato
+## 4.1 Regra de descoberta
 
 Um candidato válido pode ocorrer de três formas:
 
