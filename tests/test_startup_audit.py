@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -169,6 +170,8 @@ class StartupAuditTests(unittest.TestCase):
             root = Path(td)
             storage = Storage(root)
             source_id = "-1002698134896"
+            previous_source_2 = os.environ.get("ARMORED_SOURCE_2_ID")
+            os.environ["ARMORED_SOURCE_2_ID"] = source_id
             original = storage.original(
                 "77",
                 original_url="https://shopee.com.br/77",
@@ -196,6 +199,10 @@ class StartupAuditTests(unittest.TestCase):
                 root / "storage" / "Videos GRUPO_FONTE_2" / "77"
             )
             db.close()
+            if previous_source_2 is None:
+                os.environ.pop("ARMORED_SOURCE_2_ID", None)
+            else:
+                os.environ["ARMORED_SOURCE_2_ID"] = previous_source_2
 
 
 if __name__ == "__main__":
