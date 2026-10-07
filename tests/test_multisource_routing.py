@@ -178,6 +178,74 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
 
 
 
+def test_catchup_reuses_source2_published_item_without_parsing_composite_id(tmp_path: Path):
+    import asyncio
+    from types import SimpleNamespace
+    from armored_core.coordinator import Coordinator
+    from armored_core.models import State
+
+    db = Database(tmp_path / "db.sqlite")
+    storage = Storage(tmp_path)
+    original = storage.original(
+        "-1002698134896_77",
+        original_url="https://s.shopee.com.br/source2",
+        source_id="-1002698134896",
+    )
+    original.write_bytes(b"ORIGINAL")
+    item_id = db.create_item(
+        "77",
+        original,
+        source_id="-1002698134896",
+        topic_id=1160,
+        topic_name="source2",
+        original_url="https://s.shopee.com.br/source2",
+    )
+    db.transition(item_id, State.PUBLISHED, "already-complete")
+    db.mark_cleanup_completed(item_id)
+
+    class Source2:
+        _historical_limit = None
+        historical_materialization_failed = False
+        historical_scan_exhausted = True
+
+        def __init__(self):
+            self.calls = 0
+            self.committed = None
+            self.marked = None
+
+        async def fetch_next_async(self):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    telegram_message_id="77",
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                )
+            return None
+
+        def mark_ingested(self, message_id):
+            self.marked = message_id
+
+        def commit_live_checkpoints(self, checkpoints):
+            self.committed = dict(checkpoints)
+
+        def complete_historical_sync(self):
+            pass
+
+    source = Source2()
+    coordinator = Coordinator.__new__(Coordinator)
+    coordinator.db = db
+    coordinator.source = source
+    coordinator._last_catch_up_completed_count = 0
+
+    asyncio.run(coordinator.run_catch_up_async())
+
+    assert source.marked == "77"
+    assert source.committed == {1160: 77}
+    db.close()
+
+
 def test_source_media_workspaces_are_physically_isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
     monkeypatch.setenv("ARMORED_SOURCE_1_VIDEO_DIR", "Videos GRUPO_FONTE_1")
