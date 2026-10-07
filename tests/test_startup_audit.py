@@ -173,7 +173,7 @@ class StartupAuditTests(unittest.TestCase):
             try:
                 storage = Storage(root)
                 original = storage.original(
-                    "-1002698134896_77",
+                    "77",
                     original_url="https://shopee.com.br/77",
                     source_id="-1002698134896",
                 )
@@ -191,7 +191,7 @@ class StartupAuditTests(unittest.TestCase):
                 db.set_result(
                     item_id,
                     storage.result(
-                        item_id,
+                        "77",
                         "https://shopee.com.br/77",
                         "produto",
                         source_id="-1002698134896",
@@ -231,7 +231,7 @@ class StartupAuditTests(unittest.TestCase):
             try:
                 storage = Storage(root)
                 original = storage.original(
-                    "-1002698134896_823",
+                    "823",
                     original_url="https://shopee.com.br/823",
                     source_id="-1002698134896",
                 )
@@ -248,7 +248,7 @@ class StartupAuditTests(unittest.TestCase):
                 )
                 db.set_vision(item_id, "produto", "https://shopee.com.br/823")
                 durable_result = storage.result(
-                    item_id,
+                    "823",
                     "https://shopee.com.br/823",
                     "produto",
                     source_id="-1002698134896",
@@ -269,7 +269,7 @@ class StartupAuditTests(unittest.TestCase):
                 ).run()
 
                 expected = storage.result(
-                    item_id,
+                    "823",
                     "https://shopee.com.br/823",
                     "produto",
                     source_id="-1002698134896",
