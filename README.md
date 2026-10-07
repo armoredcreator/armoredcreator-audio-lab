@@ -775,7 +775,7 @@ download falha depois da Vision
 -> uma redescoberta pode tentar novamente
 ~~~
 
-O GitHub Actions do commit `b6258472edca0d2e0390766e0f913aa4330dfb8b` concluiu o job `unit` com sucesso no run `#24`: `179 passed, 1 skipped`.
+A validação mais recente do GitHub Actions, no commit `e202cce9ddc9c2035de80727c669a2b6087de4e1`, concluiu o job `unit` com sucesso no run `#98`: `204 passed, 1 skipped`.
 
 Comando principal:
 
