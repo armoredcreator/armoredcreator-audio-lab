@@ -39,7 +39,7 @@ class Storage:
         self.videos = self.storage / "videos"
         self.logs = self.storage / "logs"
         self.backups = self.storage / "backups"
-        for path in (self.database, self.logs, self.backups):
+        for path in (self.database, self.videos, self.logs, self.backups):
             path.mkdir(parents=True, exist_ok=True)
 
     def _configured_source_video_root(self, source_id: str) -> Path | None:
