@@ -170,6 +170,7 @@ class StartupAuditTests(unittest.TestCase):
             import os
             os.environ["ARMORED_SOURCE_2_ID"] = "-1002698134896"
             os.environ["ARMORED_SOURCE_2_VIDEO_DIR"] = "Videos GRUPO_FONTE_2"
+            db = None
             try:
                 storage = Storage(root)
                 original = storage.original(
@@ -217,8 +218,9 @@ class StartupAuditTests(unittest.TestCase):
                     ["Videos GRUPO_FONTE_2/orphan-2"],
                 )
                 self.assertEqual(summary["published"], 1)
-                db.close()
             finally:
+                if db is not None:
+                    db.close()
                 os.environ.pop("ARMORED_SOURCE_2_ID", None)
                 os.environ.pop("ARMORED_SOURCE_2_VIDEO_DIR", None)
 
