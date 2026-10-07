@@ -41,6 +41,8 @@ class StartupReconciler:
                     source_id=str(row["source_id"] or "telegram"),
                 )
             )
+            workspace = workspace.resolve()
+            expected_workspaces.add(workspace)
             files = (
                 sorted(p.name for p in workspace.iterdir() if p.is_file())
                 if workspace.is_dir()
@@ -98,7 +100,7 @@ class StartupReconciler:
                 result = current.result_path
                 if not result and current.affiliate_url:
                     result = self.storage.result(
-                        item_id,
+                        current.telegram_message_id,
                         current.affiliate_url,
                         current.affiliate_name,
                         source_id=current.source_id,
