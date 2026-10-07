@@ -112,7 +112,7 @@ def _plan_dimensions(plan, width, height):
     return width, height
 
 
-def criar_filtro(position, largura, altura, fps, plan=None):
+def criar_filtro(position, largura, altura, fps, plan=None, intro_music_volume=INTRO_MUSIC_VOLUME, main_music_volume=MUSIC_VOLUME):
     plan_video = _plan_video_filters(plan)
     base_video = plan_video + _story_normalization_filters(largura, altura) + [
         f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
@@ -141,13 +141,13 @@ def criar_filtro(position, largura, altura, fps, plan=None):
         audio_main += ",".join(audio_filters) + ","
     audio_main += (
         f"volume={VOICE_VOLUME}[voice];"
-        f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
+        f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={main_music_volume:.3f}[music];"
         "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
     )
 
     audio_intro = (
         f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        f"loudnorm=I=-5:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
+        f"loudnorm=I=-5:LRA=7:TP=-1,volume={intro_music_volume:.3f},"
         f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
     )
     concat_order = "[intro_v][intro_a][main_v][main_a]" if position == "inicio" else "[main_v][main_a][intro_v][intro_a]"
@@ -155,7 +155,7 @@ def criar_filtro(position, largura, altura, fps, plan=None):
     return ";".join([visual, intro, audio_main, audio_intro, concat])
 
 
-def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None):
+def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None, audio_profile=None):
     video, voz, musica, banner, saida = map(Path, (video, voz, musica, banner, saida))
     validar_arquivo(video, "Vídeo")
     validar_arquivo(voz, "Áudio RVC")
@@ -173,7 +173,24 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
         saida.unlink()
 
     if intro:
-        filtro = criar_filtro(position, output_largura, output_altura, fps, plan)
+        # Audio-profile routing decides whether ORIGINAL audio enters RVC
+        # and how loud the continuous effect track should be under the video.
+        # With narration, keep the main effect low so speech remains clear.
+        # Without narration (MUSIC_ONLY or NO_AUDIO), there is no speech to
+        # compete with, so the main effect uses the same high gain as the
+        # intro/final treatment.
+        main_music_gain = MUSIC_VOLUME
+        if audio_profile is not None and not audio_profile.speech_present:
+            main_music_gain = INTRO_MUSIC_VOLUME
+        filtro = criar_filtro(
+            position,
+            output_largura,
+            output_altura,
+            fps,
+            plan,
+            intro_music_volume=INTRO_MUSIC_VOLUME,
+            main_music_volume=main_music_gain,
+        )
         maps = ("[vout]", "[aout]")
     else:
         vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [

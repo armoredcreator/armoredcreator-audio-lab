@@ -279,16 +279,34 @@ class Coordinator:
                         self.db.complete_historical_sync()
                 break
 
-            item_id = str(message.telegram_message_id)
+            message_id = str(message.telegram_message_id)
+            source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+            item_id = self.db.content_id_for(message_id, source_id)
 
             # A historical candidate can be rediscovered when the persisted
             # checkpoint is still behind it (for example after an interrupted
             # certification run). A previously completed item must never be
             # counted as part of the current bounded certification.
+            #
+            # Legacy Source 1 databases may still contain certified rows with
+            # source_id="telegram" and raw content_id == message_id. Preserve
+            # that historical identity only for the configured legacy source;
+            # never fall back to raw IDs for a distinct multisource item.
             try:
                 existing = self.db.get(item_id)
             except KeyError:
                 existing = None
+                legacy_source_id = (
+                    os.getenv("ARMORED_SYNC_SOURCE_ID")
+                    or os.getenv("ARMORED_SYNC_SOURCE")
+                    or ""
+                ).strip()
+                if source_id == legacy_source_id:
+                    item_id = message_id
+                    try:
+                        existing = self.db.get(item_id)
+                    except KeyError:
+                        existing = None
             if (
                 existing is not None
                 and existing.state == State.PUBLISHED
@@ -296,7 +314,9 @@ class Coordinator:
             ):
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
-                    marker(item_id)
+                    # Sync tracks Telegram message IDs, not the source-scoped
+                    # SQLite content ID used for multisource identity.
+                    marker(message_id)
 
                 # A previously completed item may be rediscovered after an
                 # earlier candidate was recovered. Its checkpoint is safe to
@@ -304,7 +324,7 @@ class Coordinator:
                 topic_id = getattr(message, "topic_id", None)
                 commit = getattr(source, "commit_live_checkpoints", None)
                 if topic_id is not None and commit is not None:
-                    commit({int(topic_id): int(item_id)})
+                    commit({int(topic_id): int(message.telegram_message_id)})
                 continue
 
             materialized = False

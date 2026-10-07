@@ -7,6 +7,7 @@ from ArmoredHub.service import ArmoredHub
 from ArmoredSync.service import MultiTelegramSource, TelegramSource
 from armored_core.database import Database
 from armored_core.routing import load_routes
+from armored_core.storage import Storage
 
 
 def _routes(monkeypatch):
@@ -175,3 +176,167 @@ def test_legacy_source1_state_is_migrated_without_making_source2_live(tmp_path: 
     assert db.source_sync_topic_checkpoint("-1003788989075", 228) == 900
     assert db.source_sync_topic_checkpoint("-1002698134896", 228) == 0
 
+
+
+def test_source2_live_checkpoint_is_committed_to_source2_topic(tmp_path: Path):
+    import asyncio
+    from types import SimpleNamespace
+    from ArmoredSync.service import MultiTelegramSource
+
+    class FakeSource:
+        def __init__(self):
+            self.source_id = "-1002698134896"
+            self.historical_materialization_failed = False
+            self.historical_scan_exhausted = False
+            self.historical_limit_reached = False
+            self.historical_collection_limited = False
+            self.committed = []
+
+        def is_historical_complete(self):
+            return True
+
+        async def fetch_live_candidate_async(self):
+            return (
+                SimpleNamespace(
+                    telegram_message_id="88",
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                ),
+                {1160: 88},
+            )
+
+        def commit_live_checkpoints(self, checkpoints):
+            self.committed.append(dict(checkpoints))
+
+    source = FakeSource()
+    wrapper = MultiTelegramSource.__new__(MultiTelegramSource)
+    wrapper.db = SimpleNamespace(all_sources_historical_complete=lambda ids: True)
+    wrapper.routes = (
+        SimpleNamespace(source=SimpleNamespace(chat_id="s1", source_id="-1003788989075")),
+        SimpleNamespace(source=SimpleNamespace(chat_id="s2", source_id="-1002698134896")),
+    )
+    wrapper.sources = (source,)
+    wrapper._cursor = 0
+    wrapper._last_source = None
+    wrapper._pending_source = None
+    wrapper._pending_message = None
+    wrapper._pending_checkpoints = {}
+
+    message, checkpoints = asyncio.run(wrapper.fetch_live_candidate_async())
+
+    assert message.source_id == "-1002698134896"
+    assert checkpoints == {1160: 88}
+
+    wrapper.commit_live_checkpoints(checkpoints)
+    assert source.committed == [{1160: 88}]
+
+
+def test_catchup_reuses_source2_published_item_without_parsing_composite_id(tmp_path: Path):
+    import asyncio
+    from types import SimpleNamespace
+    from armored_core.coordinator import Coordinator
+    from armored_core.models import State
+
+    db = Database(tmp_path / "db.sqlite")
+    storage = Storage(tmp_path)
+    original = storage.original(
+        "77",
+        original_url="https://s.shopee.com.br/source2",
+        source_id="-1002698134896",
+    )
+    original.write_bytes(b"ORIGINAL")
+    item_id = db.create_item(
+        "77",
+        original,
+        source_id="-1002698134896",
+        topic_id=1160,
+        topic_name="source2",
+        original_url="https://s.shopee.com.br/source2",
+    )
+    db.transition(item_id, State.PUBLISHED, "already-complete")
+    db.mark_cleanup_completed(item_id)
+
+    class Source2:
+        _historical_limit = None
+        historical_materialization_failed = False
+        historical_scan_exhausted = True
+
+        def __init__(self):
+            self.calls = 0
+            self.committed = None
+            self.marked = None
+
+        async def fetch_next_async(self):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(
+                    telegram_message_id="77",
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                )
+            return None
+
+        def mark_ingested(self, message_id):
+            self.marked = message_id
+
+        def commit_live_checkpoints(self, checkpoints):
+            self.committed = dict(checkpoints)
+
+        def complete_historical_sync(self):
+            pass
+
+    source = Source2()
+    coordinator = Coordinator.__new__(Coordinator)
+    coordinator.db = db
+    coordinator.source = source
+    coordinator._last_catch_up_completed_count = 0
+
+    asyncio.run(coordinator.run_catch_up_async())
+
+    assert source.marked == "77"
+    assert source.committed == {1160: 77}
+    db.close()
+
+
+def test_source_media_workspaces_are_physically_isolated(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
+    monkeypatch.setenv("ARMORED_SOURCE_1_VIDEO_DIR", "Videos GRUPO_FONTE_1")
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_2_VIDEO_DIR", "Videos GRUPO_FONTE_2")
+    storage = Storage(tmp_path)
+    source1 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1003788989075")
+    source2 = storage.original("77", original_url="https://shopee.com.br/p/1", source_id="-1002698134896")
+
+    assert source1 != source2
+    assert source1 == tmp_path / "storage" / "Videos GRUPO_FONTE_1" / "77" / "77_1.mp4"
+    assert source2 == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77" / "77_1.mp4"
+    assert not (tmp_path / "storage" / "sources").exists()
+
+
+def test_source2_reservation_keeps_db_identity_separate_from_storage_shape(tmp_path: Path, monkeypatch):
+    from armored_core.services import IngestMessage, SyncService
+
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_2_VIDEO_DIR", "Videos GRUPO_FONTE_2")
+
+    db = Database(tmp_path / "db.sqlite")
+    storage = Storage(tmp_path)
+    sync = SyncService(db, storage)
+    message = IngestMessage(
+        telegram_message_id="77",
+        source_id="-1002698134896",
+        original_url="https://s.shopee.com.br/source2",
+        materialize=lambda target: target.write_bytes(b"video"),
+    )
+
+    item_id = sync.reserve_message(message)
+    item = db.get(item_id)
+
+    assert item_id == "-1002698134896_77"
+    assert item.telegram_message_id == "77"
+    assert item.workspace == tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77"
+    assert item.original_path == (
+        tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77" / "77_source2.mp4"
+    )

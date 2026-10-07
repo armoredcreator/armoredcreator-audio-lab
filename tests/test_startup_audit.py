@@ -164,5 +164,126 @@ class StartupAuditTests(unittest.TestCase):
             db.close()
 
 
+    def test_startup_audit_uses_source2_workspace_and_scans_source2_orphans(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            import os
+            os.environ["ARMORED_SOURCE_2_ID"] = "-1002698134896"
+            os.environ["ARMORED_SOURCE_2_VIDEO_DIR"] = "Videos GRUPO_FONTE_2"
+            db = None
+            try:
+                storage = Storage(root)
+                original = storage.original(
+                    "77",
+                    original_url="https://shopee.com.br/77",
+                    source_id="-1002698134896",
+                )
+                original.write_bytes(b"ORIGINAL")
+
+                db = Database(storage.database / "armoredcreator.db")
+                item_id = db.create_item(
+                    "77",
+                    original,
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                    original_url="https://shopee.com.br/77",
+                )
+                db.set_result(
+                    item_id,
+                    storage.result(
+                        "77",
+                        "https://shopee.com.br/77",
+                        "produto",
+                        source_id="-1002698134896",
+                    ),
+                )
+                db.publication_started(
+                    item_id,
+                    destination_chat_id="-1004341972306",
+                    destination_topic_id=1160,
+                )
+                db.publication_confirmed(item_id, "901")
+                db.transition(item_id, State.PUBLISHED, "test")
+                db.mark_cleanup_completed(item_id)
+
+                orphan = storage.storage / "Videos GRUPO_FONTE_2" / "orphan-2"
+                orphan.mkdir(parents=True)
+
+                summary = StartupReconciler(db, storage, _Publisher()).run()
+
+                self.assertEqual(summary["storage_workspaces"], 1)
+                self.assertEqual(
+                    summary["orphans"],
+                    ["Videos GRUPO_FONTE_2/orphan-2"],
+                )
+                self.assertEqual(summary["published"], 1)
+            finally:
+                if db is not None:
+                    db.close()
+                os.environ.pop("ARMORED_SOURCE_2_ID", None)
+                os.environ.pop("ARMORED_SOURCE_2_VIDEO_DIR", None)
+
+    def test_startup_recovery_rebuilds_source2_result_in_source2_workspace(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            import os
+            os.environ["ARMORED_SOURCE_2_ID"] = "-1002698134896"
+            os.environ["ARMORED_SOURCE_2_VIDEO_DIR"] = "Videos GRUPO_FONTE_2"
+            try:
+                storage = Storage(root)
+                original = storage.original(
+                    "823",
+                    original_url="https://shopee.com.br/823",
+                    source_id="-1002698134896",
+                )
+                original.write_bytes(b"ORIGINAL")
+
+                db = Database(storage.database / "armoredcreator.db")
+                item_id = db.create_item(
+                    "823",
+                    original,
+                    source_id="-1002698134896",
+                    topic_id=1160,
+                    topic_name="source2",
+                    original_url="https://shopee.com.br/823",
+                )
+                db.set_vision(item_id, "produto", "https://shopee.com.br/823")
+                durable_result = storage.result(
+                    "823",
+                    "https://shopee.com.br/823",
+                    "produto",
+                    source_id="-1002698134896",
+                )
+                durable_result.write_bytes(b"FINAL-RESULT")
+                self.assertTrue(durable_result.is_file())
+                db.publication_started(
+                    item_id,
+                    destination_chat_id="-1004341972306",
+                    destination_topic_id=1160,
+                )
+                db.fail(item_id, "RuntimeError: publication interrupted")
+
+                summary = StartupReconciler(
+                    db,
+                    storage,
+                    _AbsentPublisher(),
+                ).run()
+
+                expected = storage.result(
+                    "823",
+                    "https://shopee.com.br/823",
+                    "produto",
+                    source_id="-1002698134896",
+                )
+                self.assertEqual(db.get(item_id).state, State.RECOVERY)
+                self.assertTrue(expected.is_file())
+                self.assertEqual(summary["pending"], 1)
+                db.close()
+            finally:
+                os.environ.pop("ARMORED_SOURCE_2_ID", None)
+                os.environ.pop("ARMORED_SOURCE_2_VIDEO_DIR", None)
+
+
 if __name__ == "__main__":
     unittest.main()

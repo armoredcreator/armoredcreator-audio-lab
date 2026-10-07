@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from .models import State
 
@@ -16,10 +17,10 @@ class StartupReconciler:
 
     def run(self) -> dict:
         rows = self.db.conn.execute(
-            "SELECT content_id,state,original_path,working_path,result_path,"
+            "SELECT content_id,telegram_message_id,state,source_id,original_path,working_path,result_path,"
             "cleanup_completed FROM items ORDER BY created_at,content_id"
         ).fetchall()
-        db_ids = {str(row["content_id"]) for row in rows}
+        expected_workspaces: set[Path] = set()
         summary = {
             "items": len(rows), "published": 0, "pending": 0, "failed": 0,
             "clean": 0, "storage_workspaces": 0, "orphans": [],
@@ -31,8 +32,22 @@ class StartupReconciler:
         for row in rows:
             item_id = str(row["content_id"])
             state = str(row["state"])
-            workspace = self.storage.videos / item_id
-            files = sorted(p.name for p in workspace.iterdir() if p.is_file()) if workspace.is_dir() else []
+            stored_original = str(row["original_path"] or "").strip()
+            workspace = (
+                Path(stored_original).parent
+                if stored_original
+                else self.storage.workspace_path(
+                    item_id,
+                    source_id=str(row["source_id"] or "telegram"),
+                )
+            )
+            workspace = workspace.resolve()
+            expected_workspaces.add(workspace)
+            files = (
+                sorted(p.name for p in workspace.iterdir() if p.is_file())
+                if workspace.is_dir()
+                else []
+            )
 
             if workspace.is_dir():
                 summary["storage_workspaces"] += 1
@@ -85,9 +100,10 @@ class StartupReconciler:
                 result = current.result_path
                 if not result and current.affiliate_url:
                     result = self.storage.result(
-                        item_id,
+                        current.telegram_message_id,
                         current.affiliate_url,
                         current.affiliate_name,
+                        source_id=current.source_id,
                     )
                 if result is not None and result.is_file():
                     self.db.transition(
@@ -118,14 +134,23 @@ class StartupReconciler:
                 ",".join(files) if files else "-",
             )
 
-        if self.storage.videos.is_dir():
-            for workspace in sorted(self.storage.videos.iterdir()):
-                if workspace.is_dir() and workspace.name not in db_ids:
-                    summary["orphans"].append(workspace.name)
-                    self.log.warning(
-                        "[STARTUP][ORPHAN] storage/videos/%s sem registro SQLite",
-                        workspace.name,
-                    )
+        for video_root in self.storage.video_roots():
+            if not video_root.is_dir():
+                continue
+            for workspace in sorted(video_root.iterdir()):
+                if not workspace.is_dir() or workspace.resolve() in expected_workspaces:
+                    continue
+                if video_root == self.storage.videos:
+                    orphan_label = workspace.name
+                    location = f"storage/videos/{workspace.name}"
+                else:
+                    orphan_label = workspace.relative_to(self.storage.storage).as_posix()
+                    location = f"storage/{orphan_label}"
+                summary["orphans"].append(orphan_label)
+                self.log.warning(
+                    "[STARTUP][ORPHAN] %s sem registro SQLite",
+                    location,
+                )
 
         self.log.info(
             "[STARTUP][AUDIT] concluída: itens=%s publicados=%s pendentes=%s "
