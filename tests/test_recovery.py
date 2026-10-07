@@ -315,7 +315,7 @@ class RecoveryTests(unittest.TestCase):
 
         item_id = self.db.content_id_for("77", source_id)
         original = self.storage.original(
-            item_id,
+            "77",
             original_url="https://shopee.com.br/77",
             source_id=source_id,
         )
