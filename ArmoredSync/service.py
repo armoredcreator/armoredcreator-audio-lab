@@ -1165,29 +1165,60 @@ class MultiTelegramSource:
         return all(source.is_historical_complete() for source in self.sources)
 
     async def fetch_next_async(self) -> SyncMessage | None:
+        """Return the next historical candidate from the first unfinished source.
+
+        Historical CATCH-UP is intentionally sequential across sources:
+        Source 1 must reach durable historical_complete before Source 2 is
+        allowed to discover or process its first candidate. A source that is
+        blocked by RECOVERY/materialization failure also blocks every later
+        source. Round-robin is reserved for LIVE polling only.
+        """
         if not self.sources:
             raise RuntimeError("Nenhuma fonte Telegram configurada")
-        for offset in range(len(self.sources)):
-            index = (self._cursor + offset) % len(self.sources)
-            source = self.sources[index]
+
+        for index, source in enumerate(self.sources):
             if source.is_historical_complete():
                 continue
+
             message = await source.fetch_next_async()
             if message is not None:
-                self._cursor = (index + 1) % len(self.sources)
                 self._last_source = source
                 return message
-        if self.historical_scan_exhausted and not self.historical_materialization_failed:
-            self.complete_historical_sync()
+
+            if source.historical_materialization_failed:
+                # The current source owns the blocked checkpoint. Do not leak
+                # discovery into a later source while it is unresolved.
+                return None
+
+            if source.historical_scan_exhausted:
+                source.complete_historical_sync()
+                import logging
+                logging.getLogger(__name__).info(
+                    "[SYNC][CATCH-UP] Fonte %s historical_complete; "
+                    "liberando próxima fonte",
+                    source.source_id,
+                )
+                # Continue in this same call only after the source itself has
+                # durably transitioned to LIVE/historical_complete.
+                continue
+
+            # No candidate and no completion: keep this source authoritative.
+            return None
+
+        if self.sources and all(source.is_historical_complete() for source in self.sources):
+            self.db.complete_historical_sync()
         return None
 
     def complete_historical_sync(self) -> None:
-        if self.historical_scan_exhausted and not self.historical_materialization_failed:
-            for source in self.sources:
-                if not source.is_historical_complete():
-                    source.complete_historical_sync()
-            if self.sources:
-                self.db.complete_historical_sync()
+        for source in self.sources:
+            if (
+                source.historical_scan_exhausted
+                and not source.historical_materialization_failed
+                and not source.is_historical_complete()
+            ):
+                source.complete_historical_sync()
+        if self.sources and all(source.is_historical_complete() for source in self.sources):
+            self.db.complete_historical_sync()
 
     def mark_ingested(self, telegram_message_id: str) -> None:
         if self._last_source is not None:
