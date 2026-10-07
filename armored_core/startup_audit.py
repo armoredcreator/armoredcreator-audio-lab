@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from .models import State
 
@@ -14,12 +15,31 @@ class StartupReconciler:
         self.publisher = publisher
         self.log = logging.getLogger(__name__)
 
+    def _configured_source_roots(self) -> list[tuple[str, object]]:
+        roots: list[tuple[str, object]] = []
+        for candidate in range(1, 100):
+            source_id = (
+                os.getenv(f"ARMORED_SOURCE_{candidate}_ID")
+                or os.getenv(f"ARMORED_SOURCE_{candidate}_CHAT_ID")
+                or ""
+            ).strip()
+            if not source_id:
+                if candidate > 1:
+                    break
+                continue
+            roots.append((source_id, self.storage.source_workspace_root(source_id)))
+        return roots
+
     def run(self) -> dict:
         rows = self.db.conn.execute(
-            "SELECT content_id,state,original_path,working_path,result_path,"
-            "cleanup_completed FROM items ORDER BY created_at,content_id"
+            "SELECT content_id,state,source_id,telegram_message_id,"
+            "original_path,working_path,result_path,cleanup_completed "
+            "FROM items ORDER BY created_at,content_id"
         ).fetchall()
-        db_ids = {str(row["content_id"]) for row in rows}
+        db_ids = {
+            (str(row["source_id"]), str(row["telegram_message_id"]))
+            for row in rows
+        }
         summary = {
             "items": len(rows), "published": 0, "pending": 0, "failed": 0,
             "clean": 0, "storage_workspaces": 0, "orphans": [],
@@ -30,14 +50,21 @@ class StartupReconciler:
 
         for row in rows:
             item_id = str(row["content_id"])
-            state = str(row["state"])
-            workspace = self.storage.videos / item_id
-            files = sorted(p.name for p in workspace.iterdir() if p.is_file()) if workspace.is_dir() else []
+            source_id = str(row["source_id"] or "telegram")
+            workspace = (
+                self.storage.source_workspace_root(source_id)
+                / str(row["telegram_message_id"]).strip()
+            )
+            files = (
+                sorted(p.name for p in workspace.iterdir() if p.is_file())
+                if workspace.is_dir() else []
+            )
 
             if workspace.is_dir():
                 summary["storage_workspaces"] += 1
 
             publication = self.db.publication(item_id)
+            publication_check = None
             if publication:
                 if publication["confirmed"] and publication["published_message_id"]:
                     pub_state = f"CONFIRMED#{publication['published_message_id']}"
@@ -55,13 +82,9 @@ class StartupReconciler:
                     summary["publication_ambiguous"] += 1
             else:
                 pub_state = "NO_RECORD"
-                publication_check = None
 
             current = self.db.get(item_id)
 
-            # Older releases incorrectly classified Caption failures as
-            # WAITING_VISION. Migrate only unmistakable historical Caption
-            # evidence to RECOVERY so WAITING_VISION remains Vision-only.
             legacy_error = str(self.db.last_error(item_id) or "")
             legacy_caption = (
                 "Nenhuma das " in legacy_error
@@ -80,7 +103,7 @@ class StartupReconciler:
                 and publication is not None
                 and not publication["confirmed"]
                 and pub_state == "AMBIGUOUS"
-                and locals().get("publication_check") == "ABSENT"
+                and publication_check == "ABSENT"
             ):
                 result = current.result_path
                 if not result and current.affiliate_url:
@@ -88,6 +111,7 @@ class StartupReconciler:
                         item_id,
                         current.affiliate_url,
                         current.affiliate_name,
+                        source_id=current.source_id,
                     )
                 if result is not None and result.is_file():
                     self.db.transition(
@@ -112,18 +136,39 @@ class StartupReconciler:
                 summary["pending"] += 1
 
             self.log.debug(
-                "[STARTUP][ITEM] id=%s state=%s publication=%s cleanup=%s files=%s",
-                item_id, state, pub_state,
-                "OK" if row["cleanup_completed"] else "PENDENTE",
+                "[STARTUP][ITEM] id=%s source=%s state=%s publication=%s cleanup=%s files=%s",
+                item_id, source_id, state, pub_state,
+                "OK" if current.cleanup_completed else "PENDENTE",
                 ",".join(files) if files else "-",
             )
 
+        # Canonical source-separated workspaces.
+        for source_id, root in self._configured_source_roots():
+            if not root.is_dir():
+                continue
+            source_label = root.name
+            for workspace in sorted(root.iterdir()):
+                if not workspace.is_dir():
+                    continue
+                key = (source_id, workspace.name)
+                if key not in db_ids:
+                    summary["orphans"].append(f"{source_label}/{workspace.name}")
+                    self.log.warning(
+                        "[STARTUP][ORPHAN] %s/%s sem registro SQLite",
+                        source_label,
+                        workspace.name,
+                    )
+
+        # Preserve visibility of legacy storage/videos artifacts during the
+        # migration, but never count them as canonical workspaces.
         if self.storage.videos.is_dir():
             for workspace in sorted(self.storage.videos.iterdir()):
-                if workspace.is_dir() and workspace.name not in db_ids:
+                if not workspace.is_dir():
+                    continue
+                if not any(workspace.name == item_id for _, item_id in db_ids):
                     summary["orphans"].append(workspace.name)
                     self.log.warning(
-                        "[STARTUP][ORPHAN] storage/videos/%s sem registro SQLite",
+                        "[STARTUP][ORPHAN] legacy storage/videos/%s sem registro SQLite",
                         workspace.name,
                     )
 
@@ -165,4 +210,3 @@ class StartupReconciler:
         else:
             self.log.warning("[STARTUP][PUBLICATION] id=%s UNKNOWN", item_id)
         return value
-    

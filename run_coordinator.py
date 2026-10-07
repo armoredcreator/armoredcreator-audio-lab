@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from armored_core.coordinator import Coordinator
+from armored_core.routing import load_routes
 
 
 def main() -> int:
@@ -56,7 +57,24 @@ def main() -> int:
         logging.info("Modo SQLite: %s", coordinator.db.sync_mode())
         logging.info("Sync real Telegram: %s", os.getenv("ARMORED_REAL_TELEGRAM"))
         logging.info("Hub dry-run efetivo: %s", os.getenv("ARMORED_HUB_DRY_RUN", "0"))
-        logging.info("Fonte Sync: %s", os.getenv("ARMORED_SYNC_SOURCE") or "<não configurada>")
+        routes = load_routes()
+        if routes:
+            logging.info(
+                "[CONFIG][SOURCES] %s fonte(s): %s",
+                len(routes),
+                " | ".join(
+                    f"{route.source.source_id} -> hub {route.hub.chat_id}/topic {route.hub.topic_id}"
+                    for route in routes
+                ),
+            )
+        else:
+            logging.info("[CONFIG][SOURCES] nenhuma rota multi-source configurada")
+        legacy_source = os.getenv("ARMORED_SYNC_SOURCE")
+        if legacy_source:
+            logging.info(
+                "[CONFIG][LEGACY] ARMORED_SYNC_SOURCE=%s mantido apenas para compatibilidade",
+                legacy_source,
+            )
         max_cycles_raw = os.getenv("ARMORED_MAX_CYCLES")
         max_cycles = int(max_cycles_raw) if max_cycles_raw else None
         coordinator.run_forever(
