@@ -164,5 +164,39 @@ class StartupAuditTests(unittest.TestCase):
             db.close()
 
 
+    def test_startup_audit_uses_source_separated_workspace(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            source_id = "-1002698134896"
+            original = storage.original(
+                "77",
+                original_url="https://shopee.com.br/77",
+                source_id=source_id,
+            )
+            original.write_bytes(b"ORIGINAL")
+
+            db = Database(storage.database / "armoredcreator.db")
+            item_id = db.create_item(
+                "77",
+                original,
+                source_id=source_id,
+                topic_id=1160,
+                topic_name="source2",
+                original_url="https://shopee.com.br/77",
+            )
+
+            publisher = _Publisher()
+            summary = StartupReconciler(db, storage, publisher).run()
+
+            assert summary["items"] == 1
+            assert summary["storage_workspaces"] == 1
+            assert summary["orphans"] == []
+            assert original.parent == (
+                root / "storage" / "Videos GRUPO_FONTE_2" / "77"
+            )
+            db.close()
+
+
 if __name__ == "__main__":
     unittest.main()
