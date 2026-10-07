@@ -36,7 +36,17 @@ class ArmoredVision:
         if not original:
             raise RuntimeError("Vision: original Shopee URL ausente")
 
-        resolved = resolve_short_url(original)
+        try:
+            resolved = resolve_short_url(original)
+        except ValueError as exc:
+            # A syntactically valid Shopee/creator URL that does not identify
+            # one exact product is a Vision classification outcome, not a
+            # technical pipeline failure. Persist WAITING_VISION so historical
+            # catch-up can advance without retrying the same non-product URL.
+            raise VisionUnresolvedError(
+                f"Vision V1 não conseguiu identificar um produto Shopee exato: {original}"
+            ) from exc
+
         api = self.api or ShopeeAffiliateAPI()
         try:
             product = api.get_exact_product(resolved.shop_id, resolved.item_id)
