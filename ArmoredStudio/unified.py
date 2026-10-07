@@ -36,6 +36,11 @@ class AnalysisResult:
 class AnalysisEngine:
     """Mandatory analysis stage. No video mutation happens here."""
 
+    def __init__(self, audio_intelligence: AudioIntelligence | None = None):
+        self.audio_intelligence = audio_intelligence or AudioIntelligence(
+            os.getenv("ARMORED_FFMPEG", "ffmpeg")
+        )
+
     def analyze(self, source: Path) -> AnalysisResult:
         video = obter_informacoes_video(source)
         if not video.get("sucesso"):
@@ -74,7 +79,6 @@ class UnifiedStudio:
         self.root = Path(root).resolve()
         self.storage = storage
         self.analysis = analysis or AnalysisEngine()
-        self.audio_intelligence = AudioIntelligence(os.getenv("ARMORED_FFMPEG", "ffmpeg"))
 
     def _test_copy(self, source: Path, output: Path) -> None:
         if os.getenv("ARMORED_STUDIO_ALLOW_COPY") != "1":
