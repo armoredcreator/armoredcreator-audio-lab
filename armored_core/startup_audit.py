@@ -144,7 +144,7 @@ class StartupReconciler:
                     orphan_label = workspace.name
                     location = f"storage/videos/{workspace.name}"
                 else:
-                    orphan_label = str(workspace.relative_to(self.storage.storage))
+                    orphan_label = workspace.relative_to(self.storage.storage).as_posix()
                     location = f"storage/{orphan_label}"
                 summary["orphans"].append(orphan_label)
                 self.log.warning(
