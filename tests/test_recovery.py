@@ -339,11 +339,11 @@ class RecoveryTests(unittest.TestCase):
             def process(self, item):
                 self.calls += 1
                 working = self.storage.working(
-                    item.content_id,
+                    item.telegram_message_id,
                     source_id=item.source_id,
                 )
                 result = self.storage.result(
-                    item.content_id,
+                    item.telegram_message_id,
                     item.affiliate_url,
                     item.affiliate_name,
                     source_id=item.source_id,
@@ -366,12 +366,12 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(row.state, State.PUBLISHED)
         self.assertEqual(studio.calls, 1)
         expected_workspace = (
-            self.storage.storage / "Videos GRUPO_FONTE_2" / item_id
+            self.storage.storage / "Videos GRUPO_FONTE_2" / "77"
         )
         self.assertEqual(row.workspace, expected_workspace)
         self.assertEqual(
             row.original_path,
-            expected_workspace / f"{item_id}_77.mp4",
+            expected_workspace / "77_77.mp4",
         )
         self.assertFalse(row.result_path.exists())
         self.assertEqual(
