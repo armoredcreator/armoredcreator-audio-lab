@@ -279,16 +279,34 @@ class Coordinator:
                         self.db.complete_historical_sync()
                 break
 
-            item_id = str(message.telegram_message_id)
+            message_id = str(message.telegram_message_id)
+            source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+            item_id = self.db.content_id_for(message_id, source_id)
 
             # A historical candidate can be rediscovered when the persisted
             # checkpoint is still behind it (for example after an interrupted
             # certification run). A previously completed item must never be
             # counted as part of the current bounded certification.
+            #
+            # Legacy Source 1 databases may still contain certified rows with
+            # source_id="telegram" and raw content_id == message_id. Preserve
+            # that historical identity only for the configured legacy source;
+            # never fall back to raw IDs for a distinct multisource item.
             try:
                 existing = self.db.get(item_id)
             except KeyError:
                 existing = None
+                legacy_source_id = (
+                    os.getenv("ARMORED_SYNC_SOURCE_ID")
+                    or os.getenv("ARMORED_SYNC_SOURCE")
+                    or ""
+                ).strip()
+                if source_id == legacy_source_id:
+                    item_id = message_id
+                    try:
+                        existing = self.db.get(item_id)
+                    except KeyError:
+                        existing = None
             if (
                 existing is not None
                 and existing.state == State.PUBLISHED
