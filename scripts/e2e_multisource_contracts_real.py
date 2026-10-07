@@ -94,7 +94,7 @@ def _assert_isolated_workspace(storage: Storage, item) -> None:
     )
     workspace = Path(item.workspace).resolve()
     expected = (
-        storage.storage / source_folder / str(item.content_id)
+        storage.storage / source_folder / str(item.telegram_message_id)
     ).resolve()
     if workspace != expected:
         raise AssertionError(
