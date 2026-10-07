@@ -241,6 +241,23 @@ class SyncLifecycleTests(unittest.TestCase):
         )
 
 
+    def test_recent_probe_uses_same_video_link_and_grouped_rules(self):
+        source = CandidateSource(Path("."), FakeReader())
+        messages = [
+            FakeMessage(602, text="https://s.shopee.com.br/recent-adjacent"),
+            FakeMessage(601, video=True),
+            FakeMessage(502, grouped_id=9005),
+            FakeMessage(501, video=True, grouped_id=9005),
+            FakeMessage(500, text="https://s.shopee.com.br/recent-group", grouped_id=9005),
+        ]
+
+        candidates = source._window_candidates(messages, 10, "topic")
+
+        assert [candidate[0] for candidate in candidates] == [601, 501]
+        assert candidates[0][4] == "https://s.shopee.com.br/recent-adjacent"
+        assert candidates[1][4] == "https://s.shopee.com.br/recent-group"
+
+
     def test_historical_candidate_resolves_shopee_from_same_grouped_album(self):
         source = CandidateSource(Path("."), FakeReader())
         source._topic_messages = None
