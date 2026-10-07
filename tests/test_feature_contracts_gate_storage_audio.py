@@ -78,7 +78,7 @@ def test_vision_gate_runs_before_any_materialization(tmp_path, monkeypatch):
         events.append("download")
         assert events == ["vision", "download"]
         expected_workspace = (
-            storage.storage / "Videos GRUPO_FONTE_1" / "-1003788989075_77"
+            storage.storage / "Videos GRUPO_FONTE_1" / "77"
         )
         assert target.parent == expected_workspace
         target.write_bytes(b"telegram-video")
@@ -105,8 +105,8 @@ def test_vision_gate_runs_before_any_materialization(tmp_path, monkeypatch):
     assert item.original_path == (
         storage.storage
         / "Videos GRUPO_FONTE_1"
-        / "-1003788989075_77"
-        / "-1003788989075_77_123.mp4"
+        / "77"
+        / "77_123.mp4"
     )
     assert item.original_path.is_file()
     assert not (storage.storage / "sources").exists()
