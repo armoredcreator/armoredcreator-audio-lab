@@ -390,6 +390,13 @@ class Coordinator:
                 complete()
             else:
                 self.db.complete_historical_sync()
+
+        self._last_catch_up_completed_count = sum(
+            1
+            for item_id in set(processed)
+            if self.db.get(item_id).state == State.PUBLISHED
+            and self.db.get(item_id).cleanup_completed
+        )
         return processed
 
     async def run_catch_up_async(self) -> list[str]:
