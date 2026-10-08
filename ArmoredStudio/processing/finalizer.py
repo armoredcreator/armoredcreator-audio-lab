@@ -148,7 +148,7 @@ def criar_filtro(position, largura, altura, fps, plan=None):
 
     audio_intro = (
         f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        f"loudnorm=I=-5:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
+        f"loudnorm=I=-12:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
         f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
     )
     concat_order = "[intro_v][intro_a][main_v][main_a]" if position == "inicio" else "[main_v][main_a][intro_v][intro_a]"
