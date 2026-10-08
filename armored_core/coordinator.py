@@ -320,7 +320,7 @@ class Coordinator:
 
         # SQLite is authoritative for this phase. This also resumes items
         # approved in a previous process that stopped before downloading.
-        for item in self.db.pending_vision_items_without_original():
+        for item in self.db.pending_vision_approved_items():
             if item.state != State.RECEIVED or not item.affiliate_url:
                 continue
             if not item.original_path.is_file():
@@ -400,12 +400,11 @@ class Coordinator:
         return processed
 
     async def run_catch_up_async(self) -> list[str]:
-        """Discover, materialize, release Sync, and process exactly one item at a time.
+        """Complete historical Vision classification before one-at-a-time downloads.
 
-        CATCH-UP deliberately does not collect a materialized batch. The Sync
-        source only exposes the next eligible candidate; that candidate is
-        materialized into its canonical workspace, the Telegram session is
-        released, and only then does Vision/Studio/Hub run.
+        Telegram history is streamed; SQLite stores the durable candidate state.
+        Media is never batch-downloaded, and the canonical pipeline processes only
+        one materialized item at a time.
         """
         source = self.source
         if (
