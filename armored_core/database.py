@@ -427,11 +427,12 @@ class Database:
         )
 
     def pending_vision_items_without_original(self) -> list[Item]:
-        """Return Vision-approved rows whose immutable ORIGINAL is not materialized.
+        """Return all durable Vision-approved RECEIVED rows for staged catch-up.
 
-        SQLite remains the durable source of truth; this query reconstructs the
-        post-Vision worklist after a restart without storing a parallel queue.
-        The caller still materializes and processes only one item at a time.
+        Some rows may already have an ORIGINAL because the process stopped
+        between materialization and pipeline execution. Returning those too is
+        essential: discovery suppresses represented URLs, so they must be
+        resumed from SQLite rather than rediscovered from Telegram.
         """
         rows = self.conn.execute(
             "SELECT content_id FROM items "
@@ -440,12 +441,7 @@ class Database:
             "CAST(telegram_message_id AS INTEGER), created_at, content_id",
             (State.RECEIVED.value,),
         ).fetchall()
-        pending: list[Item] = []
-        for row in rows:
-            item = self.get(str(row["content_id"]))
-            if not item.original_path.is_file():
-                pending.append(item)
-        return pending
+        return [self.get(str(row["content_id"])) for row in rows]
 
     def last_state_event(self, item_id: str):
         row = self.conn.execute(
