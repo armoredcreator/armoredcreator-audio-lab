@@ -1170,7 +1170,12 @@ class MultiTelegramSource:
 
     @property
     def historical_scan_exhausted(self) -> bool:
-        return bool(self.sources) and all(source.historical_scan_exhausted for source in self.sources)
+        # Sources already marked LIVE in SQLite need no iterator exhaustion in
+        # this process; unfinished sources must have completed their scan.
+        return bool(self.sources) and all(
+            source.is_historical_complete() or source.historical_scan_exhausted
+            for source in self.sources
+        )
 
     @property
     def historical_limit_reached(self) -> bool:
