@@ -323,44 +323,45 @@ class Coordinator:
         for item in self.db.pending_vision_items_without_original():
             if item.state != State.RECEIVED or not item.affiliate_url:
                 continue
-            materializer = getattr(source, "materialize_candidate_async", None)
-            if materializer is None:
-                raise RuntimeError("Sync source cannot re-fetch a Vision-approved historical candidate")
+            if not item.original_path.is_file():
+                materializer = getattr(source, "materialize_candidate_async", None)
+                if materializer is None:
+                    raise RuntimeError("Sync source cannot re-fetch a Vision-approved historical candidate")
 
-            async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
-                if hasattr(source, "sources"):
-                    await source.materialize_candidate_async(source_id, message_id, target)
-                else:
-                    if str(source.source_id) != str(source_id):
-                        raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
-                    await source.materialize_candidate_async(message_id, target)
+                async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
+                    if hasattr(source, "sources"):
+                        await source.materialize_candidate_async(source_id, message_id, target)
+                    else:
+                        if str(source.source_id) != str(source_id):
+                            raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
+                        await source.materialize_candidate_async(message_id, target)
 
-            ingest = IngestMessage(
-                telegram_message_id=item.telegram_message_id,
-                source_id=item.source_id,
-                topic_id=item.topic_id,
-                topic_name=item.topic_name,
-                original_url=item.original_url,
-                materialize=materialize,
-            )
-            try:
-                await self._ensure_source_connection()
-                try:
-                    await self.sync.materialize_message_async(ingest)
-                finally:
-                    await self._release_source_connection()
-            except Exception as exc:
-                checkpoint_blocked = True
-                marker = getattr(source, "mark_materialization_failed", None)
-                if marker is not None:
-                    marker()
-                import logging
-                logging.getLogger(__name__).exception(
-                    "[COORDINATOR][CATCH-UP][DOWNLOAD] %s failed; "
-                    "checkpoint remains blocked: %s",
-                    item.content_id, exc,
+                ingest = IngestMessage(
+                    telegram_message_id=item.telegram_message_id,
+                    source_id=item.source_id,
+                    topic_id=item.topic_id,
+                    topic_name=item.topic_name,
+                    original_url=item.original_url,
+                    materialize=materialize,
                 )
-                continue
+                try:
+                    await self._ensure_source_connection()
+                    try:
+                        await self.sync.materialize_message_async(ingest)
+                    finally:
+                        await self._release_source_connection()
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    marker = getattr(source, "mark_materialization_failed", None)
+                    if marker is not None:
+                        marker()
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "[COORDINATOR][CATCH-UP][DOWNLOAD] %s failed; "
+                        "checkpoint remains blocked: %s",
+                        item.content_id, exc,
+                    )
+                    continue
 
             try:
                 self.run(item.content_id)
