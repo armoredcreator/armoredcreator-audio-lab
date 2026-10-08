@@ -14,6 +14,8 @@ def main() -> int:
     # O processo real do Coordinator deve usar o ArmoredSync/Telegram real.
     # LocalSource continua disponível apenas para testes offline via Coordinator.build().
     os.environ.setdefault("ARMORED_REAL_TELEGRAM", "1")
+    # Production must not silently run with fewer than the three configured sources.
+    os.environ.setdefault("ARMORED_REQUIRED_SOURCE_COUNT", "3")
 
     logging.basicConfig(
         level=os.getenv("ARMORED_LOG_LEVEL", "INFO").upper(),
