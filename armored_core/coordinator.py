@@ -344,6 +344,12 @@ class Coordinator:
                     if topic_id is not None and commit is not None and not checkpoint_blocked:
                         commit({int(topic_id): int(message.telegram_message_id)})
                     processed.append(item_id)
+                elif current is not None and current.state == State.RECOVERY:
+                    # Vision failed technically before the ORIGINAL existed.
+                    # Keep the source-scoped row visible to the caller and keep
+                    # the historical checkpoint blocked for a later retry.
+                    checkpoint_blocked = True
+                    processed.append(item_id)
                 continue
 
             # Exactly one item crosses the Sync -> Pipeline boundary.
