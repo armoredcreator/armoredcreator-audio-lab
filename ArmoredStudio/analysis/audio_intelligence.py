@@ -210,14 +210,18 @@ class AudioIntelligence:
             from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
             model_name = os.getenv("ARMORED_AUDIO_LANGUAGE_MODEL", "openai/whisper-tiny")
+            if getattr(self, "_language_model_name", None) == model_name and getattr(self, "_language_model", None) is None:
+                return "unknown", 0.0
             if getattr(self, "_language_model_name", None) != model_name:
+                self._language_model_name = model_name
+                self._language_model = None
+                self._language_processor = None
                 processor = AutoProcessor.from_pretrained(model_name)
                 model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
                 model.to("cpu")
                 model.eval()
                 self._language_processor = processor
                 self._language_model = model
-                self._language_model_name = model_name
 
             max_seconds = max(2, int(os.getenv("ARMORED_AUDIO_LANGUAGE_SECONDS", "8")))
             sample = samples[: self.SAMPLE_RATE * max_seconds]
