@@ -39,6 +39,18 @@ def test_routes_are_explicit_and_do_not_share_hub_topics(monkeypatch):
     ]
 
 
+
+def test_required_source_count_fails_closed_when_third_route_is_missing(monkeypatch):
+    _routes(monkeypatch)
+    monkeypatch.delenv("ARMORED_SOURCE_3_CHAT_ID")
+    monkeypatch.setenv("ARMORED_REQUIRED_SOURCE_COUNT", "3")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Esperadas 3 fontes Telegram"):
+        load_routes()
+
+
 def test_same_telegram_message_id_is_source_scoped_and_windows_safe(tmp_path: Path):
     db = Database(tmp_path / "db.sqlite")
 
