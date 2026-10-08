@@ -1201,6 +1201,10 @@ class MultiTelegramSource:
             async for message in source.iter_historical_candidates_async():
                 self._last_source = source
                 yield message
+            # ARMORED_SYNC_CATCHUP_LIMIT is a global certification boundary:
+            # do not start the next source after one source reaches that limit.
+            if source.historical_limit_reached:
+                return
 
     async def materialize_candidate_async(
         self, source_id: str, telegram_message_id: str, target: Path
