@@ -328,7 +328,12 @@ class Coordinator:
                 raise RuntimeError("Sync source cannot re-fetch a Vision-approved historical candidate")
 
             async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
-                await source.materialize_candidate_async(source_id, message_id, target)
+                if hasattr(source, "sources"):
+                    await source.materialize_candidate_async(source_id, message_id, target)
+                else:
+                    if str(source.source_id) != str(source_id):
+                        raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
+                    await source.materialize_candidate_async(message_id, target)
 
             ingest = IngestMessage(
                 telegram_message_id=item.telegram_message_id,
