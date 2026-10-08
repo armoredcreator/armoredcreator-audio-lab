@@ -140,11 +140,34 @@ class UnifiedStudio:
         audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
 
         try:
-            if audio_mode in {AudioMode.NO_AUDIO, AudioMode.MUSIC_ONLY}:
+            language = str(audio_info.get("language") or "unknown").lower()
+            try:
+                language_confidence = float(audio_info.get("language_confidence") or 0.0)
+                language_minimum = float(
+                    os.getenv("ARMORED_AUDIO_LANGUAGE_MIN_CONFIDENCE", "0.20")
+                )
+            except (TypeError, ValueError):
+                language_confidence = 0.0
+                language_minimum = 0.20
+            portuguese_verified = (
+                language == "pt" and language_confidence >= language_minimum
+            )
+
+            if (
+                audio_mode in {
+                    AudioMode.NO_AUDIO,
+                    AudioMode.MUSIC_ONLY,
+                    AudioMode.FOREIGN_SPEECH,
+                    AudioMode.SPEECH_UNVERIFIED,
+                }
+                or not portuguese_verified
+            ):
                 logging.getLogger(__name__).info(
-                    "[STUDIO][ITEM %s] Audio Intelligence=%s; RVC ignorado",
+                    "[STUDIO][ITEM %s] Audio Intelligence=%s language=%s; "
+                    "RVC ignorado e áudio original silenciado",
                     item.content_id,
                     audio_mode,
+                    language,
                 )
                 subprocess.run(
                     [
