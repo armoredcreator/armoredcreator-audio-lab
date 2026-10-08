@@ -18,7 +18,8 @@ AUDIO_BITRATE = "192k"
 
 VOICE_VOLUME = 1.0
 MUSIC_VOLUME = 0.8
-INTRO_MUSIC_VOLUME = 2.5
+# Keep the existing effect at the same level in the intro and main/final segment.
+INTRO_MUSIC_VOLUME = MUSIC_VOLUME
 
 INTRO_DURATION = 2.0
 INTRO_WIDTH = 1080
