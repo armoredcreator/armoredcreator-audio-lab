@@ -45,7 +45,12 @@ def main() -> int:
 
     coordinator = Coordinator.build(root=root)
     try:
-        required = ["ARMORED_CREATOR_BOT_TOKEN", "ARMORED_HUB_TOPIC_ID"]
+        routes = load_routes()
+        required = ["ARMORED_CREATOR_BOT_TOKEN"]
+        # Modern multi-source routing has a separate destination per source;
+        # ARMORED_HUB_TOPIC_ID is only required for the legacy single-route mode.
+        if not routes:
+            required.append("ARMORED_HUB_TOPIC_ID")
         if os.getenv("ARMORED_IA_ENABLED", "1") == "1" and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1":
             required.append("GEMINI_API_KEY")
         missing = [name for name in required if not (os.getenv(name) or "").strip()]
@@ -59,7 +64,6 @@ def main() -> int:
         logging.info("Modo SQLite: %s", coordinator.db.sync_mode())
         logging.info("Sync real Telegram: %s", os.getenv("ARMORED_REAL_TELEGRAM"))
         logging.info("Hub dry-run efetivo: %s", os.getenv("ARMORED_HUB_DRY_RUN", "0"))
-        routes = load_routes()
         if routes:
             logging.info(
                 "[CONFIG][SOURCES] %s fonte(s): %s",
