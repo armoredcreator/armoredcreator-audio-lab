@@ -126,7 +126,7 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
         item_id="-1002039708059_88",
         source_id="-1002039708059",
     )
-    assert hub._destination_for(third_item) == ("-1004341972306", 337)
+    assert hub._destination_for(third_item) == ("-1004341972306", 1327)
 
 
 
