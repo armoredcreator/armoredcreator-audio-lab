@@ -271,3 +271,73 @@ class VisionBeforeDownloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_multisource_catchup_keeps_recovery_row_when_vision_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+
+            class Source:
+                def __init__(self):
+                    self.sent = False
+                    self.exhausted = False
+                    self.failed = False
+
+                async def fetch_next_async(self):
+                    if self.sent:
+                        self.exhausted = True
+                        return None
+                    self.sent = True
+                    async def materialize(target):
+                        target.write_bytes(b"MUST-NOT-HAPPEN")
+                    from types import SimpleNamespace
+                    return SimpleNamespace(
+                        telegram_message_id="77",
+                        source_id="-1002039708059",
+                        topic_id=5,
+                        topic_name="source-three",
+                        original_url="https://shopee.com.br/product/77",
+                        materialize=materialize,
+                    )
+
+                @property
+                def historical_scan_exhausted(self):
+                    return self.exhausted
+
+                @property
+                def historical_materialization_failed(self):
+                    return self.failed
+
+                def mark_materialization_failed(self):
+                    self.failed = True
+
+                def mark_ingested(self, _message_id):
+                    pass
+
+                def commit_live_checkpoints(self, _checkpoints):
+                    raise AssertionError("checkpoint must not advance after technical Vision failure")
+
+                def complete_historical_sync(self):
+                    raise AssertionError("history must not complete while Recovery is pending")
+
+            source = Source()
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionTechnicalFailure(),
+                _Studio(storage),
+                _Publisher(),
+                source=source,
+            )
+            try:
+                item_id = str(db.content_id_for("77", "-1002039708059"))
+                processed = asyncio.run(coordinator.run_catch_up_async())
+                item = db.get(item_id)
+                self.assertEqual(processed, [item_id])
+                self.assertEqual(item.state, State.RECOVERY)
+                self.assertFalse(item.original_path.exists())
+                self.assertTrue(source.failed)
+            finally:
+                coordinator.close()
+
