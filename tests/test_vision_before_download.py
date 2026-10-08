@@ -341,3 +341,95 @@ if __name__ == "__main__":
             finally:
                 coordinator.close()
 
+    def test_staged_historical_catchup_finishes_vision_pass_before_any_download(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            events = []
+
+            class Vision:
+                def identify(self, item):
+                    events.append(f"vision:{item.telegram_message_id}")
+                    if item.telegram_message_id == "2":
+                        raise VisionUnresolvedError("produto não resolvido")
+                    return VisionResult(
+                        "Produto",
+                        "https://affiliate.invalid/product/1",
+                        affiliate_urls=("https://affiliate.invalid/product/1",),
+                        ia_context={"productName": "Produto"},
+                    )
+
+            class Studio(_Studio):
+                def process(self, item):
+                    events.append(f"studio:{item.telegram_message_id}")
+                    return super().process(item)
+
+            class Publisher(_Publisher):
+                def publish(self, item):
+                    events.append(f"publish:{item.telegram_message_id}")
+                    return super().publish(item)
+
+            class Source:
+                source_id = "telegram"
+
+                def __init__(self):
+                    self.exhausted = False
+                    self.failed = False
+                    self.completed = False
+
+                async def iter_historical_candidates_async(self):
+                    from types import SimpleNamespace
+                    for message_id in ("1", "2"):
+                        async def ignored_materializer(target):
+                            raise AssertionError("Vision pass must not download")
+                        yield SimpleNamespace(
+                            telegram_message_id=message_id,
+                            source_id=self.source_id,
+                            topic_id=1,
+                            topic_name="topic",
+                            original_url=f"https://shopee.com.br/product/{message_id}",
+                            materialize=ignored_materializer,
+                        )
+                    self.exhausted = True
+
+                async def materialize_candidate_async(self, message_id, target):
+                    events.append(f"download:{message_id}")
+                    target.write_bytes(b"ORIGINAL")
+
+                @property
+                def historical_scan_exhausted(self):
+                    return self.exhausted
+
+                @property
+                def historical_materialization_failed(self):
+                    return self.failed
+
+                def mark_ingested(self, _message_id):
+                    pass
+
+                def mark_materialization_failed(self):
+                    self.failed = True
+
+                def complete_historical_sync(self):
+                    self.completed = True
+                    db.complete_historical_sync()
+
+            source = Source()
+            coordinator = Coordinator(
+                db, storage, Vision(), Studio(storage), Publisher(), source=source
+            )
+            try:
+                processed = asyncio.run(coordinator.run_catch_up_async())
+                self.assertIn("vision:1", events)
+                self.assertIn("vision:2", events)
+                self.assertLess(events.index("vision:2"), events.index("download:1"))
+                self.assertEqual(events.count("download:1"), 1)
+                self.assertNotIn("download:2", events)
+                self.assertEqual(db.get("1").state, State.PUBLISHED)
+                self.assertEqual(db.get("2").state, State.WAITING_VISION)
+                self.assertTrue(source.completed)
+                self.assertEqual(set(processed), {"1", "2"})
+            finally:
+                coordinator.close()
+
