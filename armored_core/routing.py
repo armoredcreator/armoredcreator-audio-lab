@@ -59,6 +59,22 @@ def load_routes() -> tuple[RouteConfig, ...]:
         index += 1
 
     if routes:
+        expected_raw = (os.getenv("ARMORED_REQUIRED_SOURCE_COUNT") or "").strip()
+        if expected_raw:
+            try:
+                expected_count = int(expected_raw)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"ARMORED_REQUIRED_SOURCE_COUNT inválido: {expected_raw!r}"
+                ) from exc
+            if expected_count < 1:
+                raise RuntimeError("ARMORED_REQUIRED_SOURCE_COUNT deve ser maior que zero")
+            if len(routes) != expected_count:
+                raise RuntimeError(
+                    f"Esperadas {expected_count} fontes Telegram, mas somente {len(routes)} rota(s) "
+                    "estão completas em ARMORED_SOURCE_n_* / ARMORED_HUB_n_*; "
+                    "a inicialização foi interrompida para não omitir fontes silenciosamente."
+                )
         return tuple(routes)
 
     source = (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
