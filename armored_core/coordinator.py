@@ -279,7 +279,12 @@ class Coordinator:
                         self.db.complete_historical_sync()
                 break
 
-            item_id = str(message.telegram_message_id)
+            # Resolve the durable, source-scoped SQLite key before any operation
+            # that can fail. Telegram message IDs are only unique inside one
+            # source; using the raw ID here makes the error path lose the row for
+            # multi-source items (and can hide a persisted RECOVERY state).
+            source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+            item_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
 
             # A historical candidate can be rediscovered when the persisted
             # checkpoint is still behind it (for example after an interrupted
