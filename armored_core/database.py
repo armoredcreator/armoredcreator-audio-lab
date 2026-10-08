@@ -426,7 +426,7 @@ class Database:
             json.loads(row["ia_context_json"] or "{}"),
         )
 
-    def pending_vision_items_without_original(self) -> list[Item]:
+    def pending_vision_approved_items(self) -> list[Item]:
         """Return all durable Vision-approved RECEIVED rows for staged catch-up.
 
         Some rows may already have an ORIGINAL because the process stopped
