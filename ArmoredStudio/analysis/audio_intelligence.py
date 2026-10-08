@@ -14,6 +14,8 @@ class AudioMode:
     MUSIC_ONLY = "MUSIC_ONLY"
     SPEECH = "SPEECH"
     SPEECH_PLUS_MUSIC = "SPEECH_PLUS_MUSIC"
+    FOREIGN_SPEECH = "FOREIGN_SPEECH"
+    SPEECH_UNVERIFIED = "SPEECH_UNVERIFIED"
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,8 @@ class AudioIntelligenceResult:
     speech_ratio: float
     music_ratio: float
     method: str = "spectral-heuristic-v1"
+    language: str = "unknown"
+    language_confidence: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +37,8 @@ class AudioIntelligenceResult:
             "speech_ratio": round(float(self.speech_ratio), 3),
             "music_ratio": round(float(self.music_ratio), 3),
             "method": self.method,
+            "language": self.language,
+            "language_confidence": round(float(self.language_confidence), 3),
         }
 
 
@@ -190,9 +196,99 @@ class AudioIntelligence:
             music_ratio,
         )
 
+    def _detect_language(self, samples: np.ndarray) -> tuple[str, float]:
+        """Detect the spoken language with multilingual Whisper, conservatively.
+
+        Only a confident Portuguese result is eligible for RVC. The model is
+        cached on this AudioIntelligence instance and analyzes a short speech
+        sample rather than the full video. If the optional model cannot load,
+        return unknown so Studio mutes the original speech instead of sending
+        potentially foreign speech into the Portuguese voice converter.
+        """
+        try:
+            import torch
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+            model_name = os.getenv("ARMORED_AUDIO_LANGUAGE_MODEL", "openai/whisper-tiny")
+            if getattr(self, "_language_model_name", None) == model_name and getattr(self, "_language_model", None) is None:
+                return "unknown", 0.0
+            if getattr(self, "_language_model_name", None) != model_name:
+                self._language_model_name = model_name
+                self._language_model = None
+                self._language_processor = None
+                processor = AutoProcessor.from_pretrained(model_name)
+                model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
+                model.to("cpu")
+                model.eval()
+                self._language_processor = processor
+                self._language_model = model
+
+            max_seconds = max(2, int(os.getenv("ARMORED_AUDIO_LANGUAGE_SECONDS", "8")))
+            sample = samples[: self.SAMPLE_RATE * max_seconds]
+            if sample.size < self.SAMPLE_RATE:
+                return "unknown", 0.0
+
+            processor = self._language_processor
+            model = self._language_model
+            features = processor(
+                sample,
+                sampling_rate=self.SAMPLE_RATE,
+                return_tensors="pt",
+            ).input_features
+            decoder_start = int(model.config.decoder_start_token_id)
+            decoder_input_ids = torch.tensor([[decoder_start]], dtype=torch.long)
+            with torch.inference_mode():
+                output = model(
+                    input_features=features,
+                    decoder_input_ids=decoder_input_ids,
+                )
+                probabilities = torch.softmax(output.logits[0, -1], dim=-1)
+            language_id = int(torch.argmax(probabilities).item())
+            token = processor.tokenizer.convert_ids_to_tokens(language_id)
+            confidence = float(probabilities[language_id].item())
+            language = (
+                str(token)[2:-2]
+                if str(token).startswith("<|") and str(token).endswith("|>")
+                else "unknown"
+            )
+            minimum = float(os.getenv("ARMORED_AUDIO_LANGUAGE_MIN_CONFIDENCE", "0.20"))
+            if confidence < minimum:
+                return "unknown", confidence
+            return language, confidence
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[AUDIO INTELLIGENCE] detecção de idioma indisponível; "
+                "RVC será desativado por segurança: %s",
+                exc,
+            )
+            return "unknown", 0.0
+
     def analyze(self, source: Path) -> AudioIntelligenceResult:
         source = Path(source)
         if not source.is_file():
             raise FileNotFoundError(source)
         samples, duration = self._decode(source)
-        return self._classify_samples(samples, duration)
+        result = self._classify_samples(samples, duration)
+        if result.mode not in {AudioMode.SPEECH, AudioMode.SPEECH_PLUS_MUSIC}:
+            return result
+
+        language, language_confidence = self._detect_language(samples)
+        if language != "pt":
+            mode = (
+                AudioMode.FOREIGN_SPEECH
+                if language != "unknown"
+                else AudioMode.SPEECH_UNVERIFIED
+            )
+        else:
+            mode = result.mode
+        return AudioIntelligenceResult(
+            mode=mode,
+            confidence=result.confidence,
+            duration_seconds=result.duration_seconds,
+            speech_ratio=result.speech_ratio,
+            music_ratio=result.music_ratio,
+            method=result.method,
+            language=language,
+            language_confidence=language_confidence,
+        )

@@ -271,3 +271,165 @@ class VisionBeforeDownloadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_multisource_catchup_keeps_recovery_row_when_vision_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+
+            class Source:
+                def __init__(self):
+                    self.sent = False
+                    self.exhausted = False
+                    self.failed = False
+
+                async def fetch_next_async(self):
+                    if self.sent:
+                        self.exhausted = True
+                        return None
+                    self.sent = True
+                    async def materialize(target):
+                        target.write_bytes(b"MUST-NOT-HAPPEN")
+                    from types import SimpleNamespace
+                    return SimpleNamespace(
+                        telegram_message_id="77",
+                        source_id="-1002039708059",
+                        topic_id=5,
+                        topic_name="source-three",
+                        original_url="https://shopee.com.br/product/77",
+                        materialize=materialize,
+                    )
+
+                @property
+                def historical_scan_exhausted(self):
+                    return self.exhausted
+
+                @property
+                def historical_materialization_failed(self):
+                    return self.failed
+
+                def mark_materialization_failed(self):
+                    self.failed = True
+
+                def mark_ingested(self, _message_id):
+                    pass
+
+                def commit_live_checkpoints(self, _checkpoints):
+                    raise AssertionError("checkpoint must not advance after technical Vision failure")
+
+                def complete_historical_sync(self):
+                    raise AssertionError("history must not complete while Recovery is pending")
+
+            source = Source()
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionTechnicalFailure(),
+                _Studio(storage),
+                _Publisher(),
+                source=source,
+            )
+            try:
+                item_id = str(db.content_id_for("77", "-1002039708059"))
+                processed = asyncio.run(coordinator.run_catch_up_async())
+                item = db.get(item_id)
+                self.assertEqual(processed, [item_id])
+                self.assertEqual(item.state, State.RECOVERY)
+                self.assertFalse(item.original_path.exists())
+                self.assertTrue(source.failed)
+            finally:
+                coordinator.close()
+
+    def test_staged_historical_catchup_finishes_vision_pass_before_any_download(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            events = []
+
+            class Vision:
+                def identify(self, item):
+                    events.append(f"vision:{item.telegram_message_id}")
+                    if item.telegram_message_id == "2":
+                        raise VisionUnresolvedError("produto não resolvido")
+                    return VisionResult(
+                        "Produto",
+                        "https://affiliate.invalid/product/1",
+                        affiliate_urls=("https://affiliate.invalid/product/1",),
+                        ia_context={"productName": "Produto"},
+                    )
+
+            class Studio(_Studio):
+                def process(self, item):
+                    events.append(f"studio:{item.telegram_message_id}")
+                    return super().process(item)
+
+            class Publisher(_Publisher):
+                def publish(self, item):
+                    events.append(f"publish:{item.telegram_message_id}")
+                    return super().publish(item)
+
+            class Source:
+                source_id = "telegram"
+
+                def __init__(self):
+                    self.exhausted = False
+                    self.failed = False
+                    self.completed = False
+
+                async def iter_historical_candidates_async(self):
+                    from types import SimpleNamespace
+                    for message_id in ("1", "2"):
+                        async def ignored_materializer(target):
+                            raise AssertionError("Vision pass must not download")
+                        yield SimpleNamespace(
+                            telegram_message_id=message_id,
+                            source_id=self.source_id,
+                            topic_id=1,
+                            topic_name="topic",
+                            original_url=f"https://shopee.com.br/product/{message_id}",
+                            materialize=ignored_materializer,
+                        )
+                    self.exhausted = True
+
+                async def materialize_candidate_async(self, message_id, target):
+                    events.append(f"download:{message_id}")
+                    target.write_bytes(b"ORIGINAL")
+
+                @property
+                def historical_scan_exhausted(self):
+                    return self.exhausted
+
+                @property
+                def historical_materialization_failed(self):
+                    return self.failed
+
+                def mark_ingested(self, _message_id):
+                    pass
+
+                def mark_materialization_failed(self):
+                    self.failed = True
+
+                def complete_historical_sync(self):
+                    self.completed = True
+                    db.complete_historical_sync()
+
+            source = Source()
+            coordinator = Coordinator(
+                db, storage, Vision(), Studio(storage), Publisher(), source=source
+            )
+            try:
+                processed = asyncio.run(coordinator.run_catch_up_async())
+                self.assertIn("vision:1", events)
+                self.assertIn("vision:2", events)
+                self.assertLess(events.index("vision:2"), events.index("download:1"))
+                self.assertEqual(events.count("download:1"), 1)
+                self.assertNotIn("download:2", events)
+                self.assertEqual(db.get("1").state, State.PUBLISHED)
+                self.assertEqual(db.get("2").state, State.WAITING_VISION)
+                self.assertTrue(source.completed)
+                self.assertEqual(set(processed), {"1", "2"})
+            finally:
+                coordinator.close()
+

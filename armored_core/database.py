@@ -426,6 +426,23 @@ class Database:
             json.loads(row["ia_context_json"] or "{}"),
         )
 
+    def pending_vision_approved_items(self) -> list[Item]:
+        """Return all durable Vision-approved RECEIVED rows for staged catch-up.
+
+        Some rows may already have an ORIGINAL because the process stopped
+        between materialization and pipeline execution. Returning those too is
+        essential: discovery suppresses represented URLs, so they must be
+        resumed from SQLite rather than rediscovered from Telegram.
+        """
+        rows = self.conn.execute(
+            "SELECT content_id FROM items "
+            "WHERE state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.RECEIVED.value,),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
     def last_state_event(self, item_id: str):
         row = self.conn.execute(
             "SELECT old_state, new_state, reason, created_at "

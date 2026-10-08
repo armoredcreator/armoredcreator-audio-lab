@@ -18,10 +18,15 @@ def _routes(monkeypatch):
     monkeypatch.setenv("ARMORED_SOURCE_2_KEY", "source2")
     monkeypatch.setenv("ARMORED_SOURCE_2_CHAT_ID", "-1002698134896")
     monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    monkeypatch.setenv("ARMORED_SOURCE_3_KEY", "source3")
+    monkeypatch.setenv("ARMORED_SOURCE_3_CHAT_ID", "-1002039708059")
+    monkeypatch.setenv("ARMORED_SOURCE_3_ID", "-1002039708059")
     monkeypatch.setenv("ARMORED_HUB_1_CHAT_ID", "-1004341972306")
     monkeypatch.setenv("ARMORED_HUB_1_TOPIC_ID", "228")
     monkeypatch.setenv("ARMORED_HUB_2_CHAT_ID", "-1004341972306")
     monkeypatch.setenv("ARMORED_HUB_2_TOPIC_ID", "1160")
+    monkeypatch.setenv("ARMORED_HUB_3_CHAT_ID", "-1004341972306")
+    monkeypatch.setenv("ARMORED_HUB_3_TOPIC_ID", "1327")
     return load_routes()
 
 
@@ -30,7 +35,20 @@ def test_routes_are_explicit_and_do_not_share_hub_topics(monkeypatch):
     assert [(r.source.source_id, r.hub.topic_id) for r in routes] == [
         ("-1003788989075", 228),
         ("-1002698134896", 1160),
+        ("-1002039708059", 1327),
     ]
+
+
+
+def test_required_source_count_fails_closed_when_third_route_is_missing(monkeypatch):
+    _routes(monkeypatch)
+    monkeypatch.delenv("ARMORED_SOURCE_3_CHAT_ID")
+    monkeypatch.setenv("ARMORED_REQUIRED_SOURCE_COUNT", "3")
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Esperadas 3 fontes Telegram"):
+        load_routes()
 
 
 def test_same_telegram_message_id_is_source_scoped_and_windows_safe(tmp_path: Path):
@@ -89,6 +107,10 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
             source=SimpleNamespace(source_id="-1002698134896"),
             hub=SimpleNamespace(chat_id="-1004341972306", topic_id=1160),
         ),
+        SimpleNamespace(
+            source=SimpleNamespace(source_id="-1002039708059"),
+            hub=SimpleNamespace(chat_id="-1004341972306", topic_id=1327),
+        ),
     )
     monkeypatch.delenv("ARMORED_HUB_TOPIC_ID", raising=False)
     monkeypatch.delenv("ARMORED_CREATOR_GROUP_ID", raising=False)
@@ -99,6 +121,12 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
     )
     hub = ArmoredHub(tmp_path, Database(tmp_path / "db.sqlite"), routes=routes)
     assert hub._destination_for(item) == ("-1004341972306", 1160)
+    third_item = SimpleNamespace(
+        content_id="-1002039708059_88",
+        item_id="-1002039708059_88",
+        source_id="-1002039708059",
+    )
+    assert hub._destination_for(third_item) == ("-1004341972306", 1327)
 
 
 

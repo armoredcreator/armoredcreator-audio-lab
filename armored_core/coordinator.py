@@ -245,18 +245,177 @@ class Coordinator:
             # Sync must be released before Studio/Hub can use the same session.
             await self._release_source_connection()
 
-    async def run_catch_up_async(self) -> list[str]:
-        """Discover, materialize, release Sync, and process exactly one item at a time.
+    async def _vision_only_async(self, message):
+        """Reserve and classify a candidate without materializing its media."""
+        ingest = IngestMessage(
+            telegram_message_id=str(message.telegram_message_id),
+            source_id=str(getattr(message, "source_id", "telegram") or "telegram"),
+            topic_id=getattr(message, "topic_id", None),
+            topic_name=getattr(message, "topic_name", None),
+            original_url=getattr(message, "original_url", None),
+            source_path=getattr(message, "source_path", None),
+            materialize=getattr(message, "materialize", None),
+        )
+        item_id = str(self.sync.reserve_message(ingest))
+        current = self.db.get(item_id)
+        if current.state in {State.PUBLISHED, State.WAITING_VISION}:
+            return item_id, current
+        # A prior run may already have durably approved this candidate. Do not
+        # call Vision twice merely because its ORIGINAL still needs materializing.
+        if current.affiliate_url:
+            return item_id, current
+        if current.state == State.FAILED:
+            raise RuntimeError("FAILED item requires deterministic recovery before Vision")
+        self.pipeline.run(item_id, stop_after_vision=True)
+        return item_id, self.db.get(item_id)
 
-        CATCH-UP deliberately does not collect a materialized batch. The Sync
-        source only exposes the next eligible candidate; that candidate is
-        materialized into its canonical workspace, the Telegram session is
-        released, and only then does Vision/Studio/Hub run.
+    async def _run_staged_catch_up_async(self) -> list[str]:
+        """Run historical catch-up by tool stage: discover/Vision first, then download.
+
+        Only candidate metadata and SQLite state exist during the Vision pass.
+        Once that pass is exhausted, approved items are materialized and processed
+        one at a time. The durable SQLite rows—not an in-memory media queue—are
+        the restart boundary.
         """
+        source = self.source
+        iterator = source.iter_historical_candidates_async()
+        processed: list[str] = []
+        checkpoint_blocked = False
+
+        try:
+            async for message in iterator:
+                source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+                item_id = str(self.db.content_id_for(
+                    str(message.telegram_message_id), source_id
+                ))
+                try:
+                    item_id, current = await self._vision_only_async(message)
+                    marker = getattr(source, "mark_ingested", None)
+                    if marker is not None:
+                        marker(str(message.telegram_message_id))
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    marker = getattr(source, "mark_materialization_failed", None)
+                    if marker is not None:
+                        marker()
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "[COORDINATOR][CATCH-UP][VISION] %s failed; "
+                        "no media downloaded and historical checkpoint remains blocked: %s",
+                        item_id, exc,
+                    )
+                    try:
+                        current = self.db.get(item_id)
+                    except Exception:
+                        current = None
+
+                if current is not None:
+                    processed.append(item_id)
+                    if current.state == State.RECOVERY:
+                        checkpoint_blocked = True
+        finally:
+            # The historical scan has finished before Hub opens the shared
+            # Telethon session for publication.
+            await self._release_source_connection()
+
+        # SQLite is authoritative for this phase. This also resumes items
+        # approved in a previous process that stopped before downloading.
+        for item in self.db.pending_vision_approved_items():
+            if item.state != State.RECEIVED or not item.affiliate_url:
+                continue
+            if not item.original_path.is_file():
+                materializer = getattr(source, "materialize_candidate_async", None)
+                if materializer is None:
+                    raise RuntimeError("Sync source cannot re-fetch a Vision-approved historical candidate")
+
+                async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
+                    if hasattr(source, "sources"):
+                        await source.materialize_candidate_async(source_id, message_id, target)
+                    else:
+                        if str(source.source_id) != str(source_id):
+                            raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
+                        await source.materialize_candidate_async(message_id, target)
+
+                ingest = IngestMessage(
+                    telegram_message_id=item.telegram_message_id,
+                    source_id=item.source_id,
+                    topic_id=item.topic_id,
+                    topic_name=item.topic_name,
+                    original_url=item.original_url,
+                    materialize=materialize,
+                )
+                try:
+                    await self._ensure_source_connection()
+                    try:
+                        await self.sync.materialize_message_async(ingest)
+                    finally:
+                        await self._release_source_connection()
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    marker = getattr(source, "mark_materialization_failed", None)
+                    if marker is not None:
+                        marker()
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "[COORDINATOR][CATCH-UP][DOWNLOAD] %s failed; "
+                        "checkpoint remains blocked: %s",
+                        item.content_id, exc,
+                    )
+                    continue
+
+            try:
+                self.run(item.content_id)
+                current = self.db.get(item.content_id)
+                if current.state == State.RECOVERY:
+                    checkpoint_blocked = True
+                if item.content_id not in processed:
+                    processed.append(item.content_id)
+            except Exception as exc:
+                checkpoint_blocked = True
+                import logging
+                logging.getLogger(__name__).exception(
+                    "[COORDINATOR][CATCH-UP][PIPELINE] %s failed; checkpoint blocked: %s",
+                    item.content_id, exc,
+                )
+                if item.content_id not in processed:
+                    processed.append(item.content_id)
+
+        failed = checkpoint_blocked or bool(
+            getattr(source, "historical_materialization_failed", False)
+        )
+        scan_complete = bool(getattr(source, "historical_scan_exhausted", False))
+        if scan_complete and not failed:
+            complete = getattr(source, "complete_historical_sync", None)
+            if complete is not None:
+                complete()
+            else:
+                self.db.complete_historical_sync()
+
+        self._last_catch_up_completed_count = sum(
+            1
+            for item_id in set(processed)
+            if self.db.get(item_id).state == State.PUBLISHED
+            and self.db.get(item_id).cleanup_completed
+        )
+        return processed
+
+    async def run_catch_up_async(self) -> list[str]:
+        """Complete historical Vision classification before one-at-a-time downloads.
+
+        Telegram history is streamed; SQLite stores the durable candidate state.
+        Media is never batch-downloaded, and the canonical pipeline processes only
+        one materialized item at a time.
+        """
+        source = self.source
+        if (
+            callable(getattr(source, "iter_historical_candidates_async", None))
+            and callable(getattr(source, "materialize_candidate_async", None))
+        ):
+            return await self._run_staged_catch_up_async()
+
         processed: list[str] = []
         completed_count = 0
         checkpoint_blocked = False
-        source = self.source
         bounded_limit = getattr(source, "_historical_limit", None)
         fetch_next = getattr(source, "fetch_next_async", None)
         if fetch_next is None:
@@ -279,7 +438,12 @@ class Coordinator:
                         self.db.complete_historical_sync()
                 break
 
-            item_id = str(message.telegram_message_id)
+            # Resolve the durable, source-scoped SQLite key before any operation
+            # that can fail. Telegram message IDs are only unique inside one
+            # source; using the raw ID here makes the error path lose the row for
+            # multi-source items (and can hide a persisted RECOVERY state).
+            source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+            item_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
 
             # A historical candidate can be rediscovered when the persisted
             # checkpoint is still behind it (for example after an interrupted
@@ -338,6 +502,12 @@ class Coordinator:
                     commit = getattr(source, "commit_live_checkpoints", None)
                     if topic_id is not None and commit is not None and not checkpoint_blocked:
                         commit({int(topic_id): int(message.telegram_message_id)})
+                    processed.append(item_id)
+                elif current is not None and current.state == State.RECOVERY:
+                    # Vision failed technically before the ORIGINAL existed.
+                    # Keep the source-scoped row visible to the caller and keep
+                    # the historical checkpoint blocked for a later retry.
+                    checkpoint_blocked = True
                     processed.append(item_id)
                 continue
 

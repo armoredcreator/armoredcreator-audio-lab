@@ -470,6 +470,25 @@ class TelegramSource:
             f"{actual_size / 1048576:.1f} MiB em {elapsed:.1f}s"
         )
 
+    async def materialize_candidate_async(self, telegram_message_id: str, target: Path) -> None:
+        """Re-fetch one already-Vision-approved Telegram video by durable message ID."""
+        source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+        if not source:
+            raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
+        source_ref = int(source) if str(source).lstrip("-").isdigit() else source
+        await self.reader.connect()
+        message = await self.reader.client.get_messages(
+            source_ref,
+            ids=int(telegram_message_id),
+        )
+        if isinstance(message, (list, tuple)):
+            message = next((value for value in message if value is not None), None)
+        if message is None or not getattr(message, "video", None):
+            raise RuntimeError(
+                f"historical-video-not-found:{self.source_id}:{telegram_message_id}"
+            )
+        await self._download_to(message, target)
+
     async def fetch_next_async(self) -> SyncMessage | None:
         if self.is_historical_complete():
             return None
@@ -1151,7 +1170,12 @@ class MultiTelegramSource:
 
     @property
     def historical_scan_exhausted(self) -> bool:
-        return bool(self.sources) and all(source.historical_scan_exhausted for source in self.sources)
+        # Sources already marked LIVE in SQLite need no iterator exhaustion in
+        # this process; unfinished sources must have completed their scan.
+        return bool(self.sources) and all(
+            source.is_historical_complete() or source.historical_scan_exhausted
+            for source in self.sources
+        )
 
     @property
     def historical_limit_reached(self) -> bool:
@@ -1163,6 +1187,49 @@ class MultiTelegramSource:
 
     def is_historical_complete(self) -> bool:
         return all(source.is_historical_complete() for source in self.sources)
+
+    async def iter_historical_candidates_async(self):
+        """Stream all sources' historical candidates without downloading media.
+
+        Candidates are reserved and Vision-gated by the Coordinator as they
+        stream. Each source's topic checkpoints remain pending until the
+        Coordinator confirms the complete staged catch-up.
+        """
+        for source in self.sources:
+            if source.is_historical_complete():
+                continue
+            async for message in source.iter_historical_candidates_async():
+                self._last_source = source
+                yield message
+            # ARMORED_SYNC_CATCHUP_LIMIT is a global certification boundary:
+            # do not start the next source after one source reaches that limit.
+            if source.historical_limit_reached:
+                return
+
+    async def materialize_candidate_async(
+        self, source_id: str, telegram_message_id: str, target: Path
+    ) -> None:
+        source = next(
+            (candidate for candidate in self.sources
+             if str(candidate.source_id) == str(source_id)),
+            None,
+        )
+        if source is None:
+            raise RuntimeError(f"unknown-source-for-materialization:{source_id}")
+        self._last_source = source
+        await source.materialize_candidate_async(telegram_message_id, target)
+
+    def commit_candidate_checkpoint(
+        self, source_id: str, checkpoints: dict[int, int]
+    ) -> None:
+        source = next(
+            (candidate for candidate in self.sources
+             if str(candidate.source_id) == str(source_id)),
+            None,
+        )
+        if source is None:
+            raise RuntimeError(f"unknown-source-for-checkpoint:{source_id}")
+        source.commit_live_checkpoints(checkpoints)
 
     async def fetch_next_async(self) -> SyncMessage | None:
         """Return the next historical candidate from the first unfinished source.
