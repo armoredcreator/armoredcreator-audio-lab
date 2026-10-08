@@ -26,7 +26,7 @@ def _routes(monkeypatch):
     monkeypatch.setenv("ARMORED_HUB_2_CHAT_ID", "-1004341972306")
     monkeypatch.setenv("ARMORED_HUB_2_TOPIC_ID", "1160")
     monkeypatch.setenv("ARMORED_HUB_3_CHAT_ID", "-1004341972306")
-    monkeypatch.setenv("ARMORED_HUB_3_TOPIC_ID", "337")
+    monkeypatch.setenv("ARMORED_HUB_3_TOPIC_ID", "1327")
     return load_routes()
 
 
@@ -35,7 +35,7 @@ def test_routes_are_explicit_and_do_not_share_hub_topics(monkeypatch):
     assert [(r.source.source_id, r.hub.topic_id) for r in routes] == [
         ("-1003788989075", 228),
         ("-1002698134896", 1160),
-        ("-1002039708059", 337),
+        ("-1002039708059", 1327),
     ]
 
 
@@ -109,7 +109,7 @@ def test_hub_routes_source2_to_hub2(tmp_path: Path, monkeypatch):
         ),
         SimpleNamespace(
             source=SimpleNamespace(source_id="-1002039708059"),
-            hub=SimpleNamespace(chat_id="-1004341972306", topic_id=337),
+            hub=SimpleNamespace(chat_id="-1004341972306", topic_id=1327),
         ),
     )
     monkeypatch.delenv("ARMORED_HUB_TOPIC_ID", raising=False)
