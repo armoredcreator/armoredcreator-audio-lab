@@ -951,11 +951,15 @@ class TelegramSource:
                     else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
                 )
                 messages = []
+                history_kwargs = {
+                    "min_id": max(0, checkpoint),
+                    "reverse": True,
+                }
+                if int(topic_id) > 0:
+                    history_kwargs["reply_to"] = int(topic_id)
                 async for message in self.reader.client.iter_messages(
                     source_ref,
-                    reply_to=topic_id,
-                    min_id=max(0, checkpoint),
-                    reverse=True,
+                    **history_kwargs,
                 ):
                     messages.append(message)
 
@@ -1071,12 +1075,16 @@ class TelegramSource:
                 scan_limit = 20
 
             messages = []
+            history_kwargs = {
+                "min_id": max(0, checkpoint),
+                "reverse": True,
+                "limit": scan_limit,
+            }
+            if int(topic_id) > 0:
+                history_kwargs["reply_to"] = int(topic_id)
             async for message in self.reader.client.iter_messages(
                 source_ref,
-                reply_to=topic_id,
-                min_id=max(0, checkpoint),
-                reverse=True,
-                limit=scan_limit,
+                **history_kwargs,
             ):
                 messages.append(message)
 
@@ -1149,10 +1157,10 @@ class TelegramSource:
                 original_url = self._shopee_url(message)
                 if original_url is None and index + 1 < len(messages):
                     next_message = messages[index + 1]
-                    if not getattr(next_message, "video", None):
+                    if not self._is_video_message(next_message):
                         original_url = self._shopee_url(next_message)
 
-                if original_url is None or self._shopee_url_exists(original_url):
+                if original_url is not None and self._shopee_url_exists(original_url):
                     safe_checkpoint = max(safe_checkpoint, message_id)
                     index += 1
                     continue
