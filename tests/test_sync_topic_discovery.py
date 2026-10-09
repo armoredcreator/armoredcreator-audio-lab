@@ -61,6 +61,77 @@ class TelegramDiscoveryTests(unittest.TestCase):
         self.assertEqual(topics[-1], (102, "topic-102"))
         self.assertEqual(len(client.requests), 2)
 
+    def test_forum_video_matches_product_link_posted_immediately_before_it(self):
+        product_url = "https://shopee.com.br/product/12"
+        messages = [
+            SimpleNamespace(id=102, video=None, message=product_url, entities=[], grouped_id=None),
+            SimpleNamespace(id=101, video=object(), message="", entities=[], grouped_id=None),
+            SimpleNamespace(id=100, video=None, message="older unrelated message", entities=[], grouped_id=None),
+        ]
+
+        class CandidateSource(TelegramSource):
+            async def _topic_messages(self, _source, _topic_id):
+                for message in messages:
+                    yield message
+
+        source = CandidateSource(
+            Path("."),
+            SimpleNamespace(),
+            db=None,
+            source="-100123",
+            source_id="-100123",
+        )
+
+        async def collect():
+            return [
+                candidate
+                async for candidate in source._candidate_iterator(
+                    -100123,
+                    [(500, "topic")],
+                )
+            ]
+
+        candidates = asyncio.run(collect())
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0][0], 101)
+        self.assertEqual(candidates[0][4], product_url)
+
+    def test_general_history_video_matches_product_link_posted_after_it(self):
+        product_url = "https://shopee.com.br/product/13"
+        messages = [
+            SimpleNamespace(id=101, video=object(), message="", entities=[], grouped_id=None),
+            SimpleNamespace(id=102, video=None, message=product_url, entities=[], grouped_id=None),
+        ]
+
+        class CandidateSource(TelegramSource):
+            async def _topic_messages(self, _source, _topic_id):
+                for message in messages:
+                    yield message
+
+        source = CandidateSource(
+            Path("."),
+            SimpleNamespace(),
+            db=None,
+            source="-100123",
+            source_id="-100123",
+        )
+
+        async def collect():
+            return [
+                candidate
+                async for candidate in source._candidate_iterator(
+                    -100123,
+                    [(500, "topic")],
+                )
+            ]
+
+        candidates = asyncio.run(collect())
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0][0], 101)
+        self.assertEqual(candidates[0][4], product_url)
+
     def test_general_history_is_streamed_without_loading_media(self):
         messages = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
         client = FakeTelegramClient(messages=messages)
