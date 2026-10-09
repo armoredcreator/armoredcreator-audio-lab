@@ -313,6 +313,22 @@ def test_internal_source_prefix_never_leaks_into_canonical_media_filenames(tmp_p
     assert result.name == "77_finaldomeulinknovo.mp4"
 
 
+def test_output_paths_infer_source_from_internal_content_id(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
+    monkeypatch.setenv("ARMORED_SOURCE_2_ID", "-1002698134896")
+    storage = Storage(tmp_path)
+
+    inferred = storage.result(
+        "-1002698134896_77",
+        affiliate_url="https://shopee.com.br/product/1",
+    )
+
+    assert inferred.parent == (
+        tmp_path / "storage" / "Videos GRUPO_FONTE_2" / "77"
+    )
+    assert inferred.name == "77_finaldomeulinknovo.mp4"
+
+
 def test_recovery_item_is_not_hidden_by_source_scoped_url_dedup(tmp_path: Path):
     db = Database(tmp_path / "db.sqlite")
     url = "https://shopee.com.br/product/recover-me"
