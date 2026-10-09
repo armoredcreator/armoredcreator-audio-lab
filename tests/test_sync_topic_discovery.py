@@ -132,6 +132,52 @@ class TelegramDiscoveryTests(unittest.TestCase):
         self.assertEqual(candidates[0][0], 101)
         self.assertEqual(candidates[0][4], product_url)
 
+    def test_video_without_shopee_link_is_still_reserved_for_vision(self):
+        messages = [
+            SimpleNamespace(id=101, video=object(), message="", entities=[], grouped_id=None),
+            SimpleNamespace(id=100, video=None, message="sem link de produto", entities=[], grouped_id=None),
+        ]
+
+        class CandidateSource(TelegramSource):
+            async def _topic_messages(self, _source, _topic_id):
+                for message in messages:
+                    yield message
+
+        source = CandidateSource(
+            Path("."),
+            SimpleNamespace(),
+            db=None,
+            source="-100123",
+            source_id="-100123",
+        )
+
+        async def collect():
+            return [
+                candidate
+                async for candidate in source._candidate_iterator(
+                    -100123,
+                    [(500, "topic")],
+                )
+            ]
+
+        candidates = asyncio.run(collect())
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0][0], 101)
+        self.assertIsNone(candidates[0][4])
+
+    def test_album_without_links_keeps_each_video_for_vision(self):
+        source = self.make_source(FakeTelegramClient())
+        videos = [
+            SimpleNamespace(id=201, video=object(), message="", entities=[], grouped_id=99),
+            SimpleNamespace(id=202, video=object(), message="", entities=[], grouped_id=99),
+        ]
+
+        candidates = source._grouped_candidates(videos, 500, "topic")
+
+        self.assertEqual([candidate[0] for candidate in candidates], [201, 202])
+        self.assertEqual([candidate[4] for candidate in candidates], [None, None])
+
     def test_video_sent_as_generic_document_is_still_a_candidate(self):
         product_url = "https://shopee.com.br/product/14"
         messages = [
