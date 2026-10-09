@@ -41,8 +41,20 @@ class FakeDB:
             execute=lambda _sql, _params=(): SimpleNamespace(fetchone=lambda: (0,))
         )
 
+    def vision_approved_interrupted_items(self):
+        return [
+            item for item in self.items.values()
+            if item.state == State.VISION and item.affiliate_url
+        ]
+
+    def transition(self, item_id, new_state, _reason=""):
+        self.items[item_id].state = new_state
+
     def pending_vision_candidates(self):
-        return [item for item in self.items.values() if not item.affiliate_url]
+        return [
+            item for item in self.items.values()
+            if not item.affiliate_url and item.state in (State.RECEIVED, State.VISION)
+        ]
 
     def pending_vision_approved_items(self):
         return [item for item in self.items.values() if item.affiliate_url]
@@ -172,6 +184,25 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(source.downloads, [])
         self.assertEqual(coordinator.production_calls, 0)
         self.assertEqual(report["processed"], 3)
+
+    def test_vision_recovers_approved_evidence_after_crash_before_state_transition(self):
+        item = make_item(
+            SOURCE_IDS[0],
+            199,
+            Path(tempfile.gettempdir()) / "vision-crash-window.mp4",
+        )
+        item.state = State.VISION
+        item.affiliate_url = "https://example.invalid/approved"
+        source = FakeSource()
+        db = FakeDB([item])
+        coordinator = FakeCoordinator(source, db)
+
+        report = asyncio.run(run_catch_up_stage(coordinator, "vision"))
+
+        self.assertEqual(item.state, State.RECEIVED)
+        self.assertEqual(coordinator.pipeline.calls, [])
+        self.assertEqual(report["processed"], 0)
+        self.assertEqual(report["errors"], [])
 
     def test_stock_downloads_only_approved_items_in_source_order_and_never_produces(self):
         with tempfile.TemporaryDirectory() as td:
