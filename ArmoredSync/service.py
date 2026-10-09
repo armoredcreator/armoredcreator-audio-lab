@@ -1014,8 +1014,8 @@ class TelegramSource:
                             if not self._is_video_message(next_message):
                                 original_url = self._shopee_url(next_message)
                         if (
-                            original_url is not None
-                            and not self._shopee_url_exists(original_url)
+                            original_url is None
+                            or not self._shopee_url_exists(original_url)
                         ):
                             candidates.append(SyncMessage(
                                 telegram_message_id=str(message_id),
