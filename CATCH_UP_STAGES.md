@@ -10,9 +10,9 @@ Execute no PowerShell, a partir da raiz do projeto, com `credentials/project.env
 python .\run_catchup_stage.py sync
 ```
 
-Reserva metadados no SQLite na ordem das fontes configuradas. Não executa Vision nem baixa mídia. A descoberta percorre todos os tópicos paginados e também aceita histórico geral de grupos/canais sem fórum.
+Reserva metadados no SQLite na ordem das fontes configuradas. Não executa Vision nem baixa mídia. A descoberta percorre todos os tópicos paginados, aceita histórico geral de grupos/canais sem fórum e reserva vídeos mesmo sem link; esses vídeos ficam para a Vision decidir, sem download.
 
-Só avance se o comando terminar com código 0 e o relatório indicar varredura histórica esgotada, sem erros e sem limite de coleta atingido. O estado histórico permanece em CATCH-UP; esta etapa não faz cutover para LIVE.
+Se `ARMORED_SYNC_CATCHUP_LIMIT` estiver finito, o Sync falha antes de reservar itens; remova a variável ou configure `0` para buscar o histórico completo. Só avance se o comando terminar com código 0 e o relatório indicar varredura histórica esgotada e sem erros. O estado histórico permanece em CATCH-UP; esta etapa não faz cutover para LIVE.
 
 ## 2. Vision nas três fontes
 
@@ -22,7 +22,7 @@ Depois de revisar o relatório do Sync, execute explicitamente:
 python .\run_catchup_stage.py vision
 ```
 
-Classifica candidatos duráveis elegíveis com `stop_after_vision=True`. Itens não resolvidos ficam em `WAITING_VISION`; nenhum vídeo é baixado nesta etapa. Falhas técnicas produzem relatório não-zero e devem ser resolvidas antes de continuar.
+Classifica candidatos duráveis elegíveis com `stop_after_vision=True`. Vídeos sem link Shopee ou com produto não resolvido ficam em `WAITING_VISION`; nenhum vídeo é baixado nesta etapa. Falhas técnicas param a etapa no primeiro item, produzem relatório não-zero e devem ser resolvidas antes de continuar.
 
 ## 3. ArmoredStock nas três fontes
 
@@ -32,7 +32,7 @@ Depois de revisar o relatório da Vision, execute explicitamente:
 python .\run_catchup_stage.py stock
 ```
 
-Baixa, um por vez, somente originais aprovados pela Vision. Não executa IA, Studio/RVC, Hub, Telegram/publicação, cleanup ou LIVE.
+Só começa se não houver candidatos aguardando decisão da Vision. Baixa, um por vez, somente originais aprovados pela Vision; a primeira falha interrompe a etapa para preservar a ordem. Não executa IA, Studio/RVC, Hub, Telegram/publicação, cleanup ou LIVE.
 
 ## Parada obrigatória após ArmoredStock
 
