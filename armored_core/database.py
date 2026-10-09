@@ -443,6 +443,22 @@ class Database:
         ).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
 
+    def vision_approved_interrupted_items(self) -> list[Item]:
+        """Find Vision rows where evidence was committed before a crash.
+
+        Pipeline persists affiliate_url before transitioning VISION back to
+        RECEIVED in pre-download mode. A process crash between those commits
+        must not strand the approved candidate outside both Vision and Stock.
+        """
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE state=? "
+            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.VISION.value,),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
     def pending_vision_candidates(self) -> list[Item]:
         """Return reserved rows whose Vision gate has not produced a decision."""
         rows = self.conn.execute(
