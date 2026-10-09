@@ -291,6 +291,28 @@ def test_source_workspaces_are_physically_separated(tmp_path: Path, monkeypatch)
     ).parent == second
 
 
+def test_internal_source_prefix_never_leaks_into_canonical_media_filenames(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("ARMORED_SOURCE_1_ID", "-1003788989075")
+    storage = Storage(tmp_path)
+    content_id = "-1003788989075_77"
+
+    workspace = storage.workspace(content_id, source_id="-1003788989075")
+    original = storage.original(
+        content_id,
+        original_url="https://shopee.com.br/product/1",
+        source_id="-1003788989075",
+    )
+    result = storage.result(
+        content_id,
+        affiliate_url="https://shopee.com.br/product/1",
+        source_id="-1003788989075",
+    )
+
+    assert workspace == tmp_path / "storage" / "Videos GRUPO_FONTE_1" / "77"
+    assert original.name == "77_finallinkoriginal.mp4"
+    assert result.name == "77_finaldomeulinknovo.mp4"
+
+
 def test_recovery_item_is_not_hidden_by_source_scoped_url_dedup(tmp_path: Path):
     db = Database(tmp_path / "db.sqlite")
     url = "https://shopee.com.br/product/recover-me"
