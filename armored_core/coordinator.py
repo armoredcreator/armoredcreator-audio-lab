@@ -60,6 +60,17 @@ class Coordinator:
             load_dotenv(project_config, override=False)
 
         db = Database(storage.database / "armoredcreator.db")
+        runtime_lock_acquired = False
+        if acquire_runtime_lock:
+            # Acquire before route initialization or any staged database writes.
+            db.acquire_runtime_lock("coordinator")
+            runtime_lock_acquired = True
+
+        def make_coordinator(vision, studio, publisher, source, ia=None):
+            coordinator = cls(db, storage, vision, studio, publisher, source, ia)
+            coordinator._runtime_lock_held = runtime_lock_acquired
+            return coordinator
+
         if bindings is None:
             from ArmoredHub.service import ArmoredHub
             from ArmoredStudio.service import ArmoredStudio
