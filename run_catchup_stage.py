@@ -47,7 +47,7 @@ def main() -> int:
     try:
         # Acquire the SQLite lease inside the composition root, before it
         # initializes source state or performs any staged database writes.
-        coordinator = Coordinator.build(root=root, acquire_runtime_lock=True)
+        coordinator = Coordinator.build(root=root, acquire_runtime_lock=True, staged=True)
 
         routes = getattr(coordinator.source, "sources", ())
         if len(routes) != 3:
