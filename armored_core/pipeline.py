@@ -299,13 +299,10 @@ class Pipeline:
             # Recovery is valid only when the immutable ORIGINAL exists. Before
             # download, preserve RECEIVED/VISION so the explicit Vision/Stock
             # stages can retry from SQLite instead of stranding the item.
-            if (
-                current.state != State.FAILED
-                and not current.original_path.is_file()
-            ):
+            if not current.original_path.is_file():
                 retry_state = (
                     current.state
-                    if current.state in (State.RECEIVED, State.VISION)
+                    if current.state in (State.RECEIVED, State.VISION, State.FAILED)
                     else (
                         State.RECEIVED
                         if current.affiliate_url
