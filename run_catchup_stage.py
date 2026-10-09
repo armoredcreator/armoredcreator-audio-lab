@@ -39,6 +39,11 @@ def main() -> int:
 
     coordinator = Coordinator.build(root=root)
     try:
+        # Use the same SQLite runtime lease as the production Coordinator.
+        # Never run a staged operation concurrently with another process on this DB.
+        coordinator.db.acquire_runtime_lock("coordinator")
+        coordinator._runtime_lock_held = True
+
         routes = getattr(coordinator.source, "sources", ())
         if len(routes) != 3:
             raise RuntimeError(
