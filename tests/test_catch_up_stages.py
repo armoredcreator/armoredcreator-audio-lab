@@ -47,12 +47,6 @@ class FakeDB:
             if item.state == State.RECOVERY and not item.original_path.is_file()
         ]
 
-    def pre_download_recovery_items(self):
-        return [
-            item for item in self.items.values()
-            if item.state == State.RECOVERY and not item.original_path.is_file()
-        ]
-
     def vision_approved_interrupted_items(self):
         return [
             item for item in self.items.values()
