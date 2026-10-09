@@ -235,13 +235,14 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     else:
         outcomes["downloaded"] = len(processed)
         outcomes["skipped_existing_original"] = skipped_existing_original
-        remaining = coordinator.db.conn.execute(
-            "SELECT COUNT(*) FROM items WHERE state=? "
-            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
-            "AND (original_path IS NULL OR TRIM(original_path)='')",
-            (State.RECEIVED.value,),
-        ).fetchone()[0]
-        outcomes["approved_missing_original_path"] = int(remaining)
+        remaining = sum(
+            1
+            for candidate in coordinator.db.pending_vision_approved_items()
+            if candidate.state == State.RECEIVED
+            and candidate.affiliate_url
+            and not candidate.original_path.is_file()
+        )
+        outcomes["approved_missing_original"] = int(remaining)
 
     report = {
         "stage": stage,
