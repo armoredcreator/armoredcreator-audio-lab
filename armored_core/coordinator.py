@@ -231,17 +231,11 @@ class Coordinator:
                 return item_id, True, self.db.get(item_id)
             return item_id, True, current
         except Exception:
-            # A technical Vision failure happens before the materialization
-            # phase and may still need the immutable original for Recovery.
-            # Once Vision has durably accepted the candidate (affiliate_url),
-            # a failure here is the Sync materialization failure itself: do not
-            # retry the download inline. Leave RECEIVED without the original
-            # so the recovery wrapper can perform its single same-run source
-            # rediscovery through the durable checkpoint.
-            # Vision is now a hard pre-download gate. A technical Vision
-            # failure is durable RECOVERY, but it must never trigger a download
-            # merely to make Recovery possible. Recovery/source rediscovery will
-            # retry the candidate from Telegram without materializing media first.
+            # Before an immutable ORIGINAL exists, a technical Vision failure
+            # remains retryable in RECEIVED/VISION and blocks checkpoint progress.
+            # After Vision approval, a download failure leaves the approved
+            # RECEIVED row durable so the explicit Stock stage can retry it.
+            # Never create RECOVERY merely to make a pre-download error recoverable.
             raise
         finally:
             # Sync must be released before Studio/Hub can use the same session.
@@ -803,12 +797,12 @@ class Coordinator:
         return isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError))
 
     async def _run_catch_up_with_recovery_async(self) -> None:
-        """Run historical processing, then retry technical RECOVERY items.
+        """Run historical processing and reconcile only recoverable items with ORIGINAL.
 
-        A technical failure must not starve the rest of CATCH-UP. Its checkpoint
-        remains blocked, so after the historical scan we reconcile RECOVERY
-        items and, when progress is made, rescan from the durable checkpoint.
-        WAITING_VISION is intentionally not auto-retried here.
+        A technical pre-download Vision failure remains in VISION with its error
+        recorded; it is not sent to Recovery and the historical checkpoint stays
+        blocked. RECOVERY reconciliation is reserved for failures with durable
+        media/artifacts. WAITING_VISION is intentionally not auto-retried here.
 
         Real Telegram connection failures can also happen while the historical
         iterator is being advanced after a materialization failure. In that
