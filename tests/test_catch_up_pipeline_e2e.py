@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from armored_core.coordinator import Coordinator
 from armored_core.database import Database
 from armored_core.models import State
-from armored_core.services import StudioResult, VisionResult
+from armored_core.services import VisionResult, VisionUnresolvedError
 from armored_core.storage import Storage
 from armored_core.catch_up_stages import run_catch_up_stage
 
@@ -19,6 +19,8 @@ SOURCE_IDS = (
 
 class FakeVision:
     def identify(self, item):
+        if not item.original_url:
+            raise VisionUnresolvedError("link Shopee ausente")
         return VisionResult(
             "produto-validado",
             f"https://affiliate.invalid/{item.telegram_message_id}",
@@ -74,16 +76,21 @@ class FakeMultiTelegramSource:
 
 
 def _messages():
+    entries = (
+        (SOURCE_IDS[0], "1001", "https://shopee.com.br/product/1001"),
+        (SOURCE_IDS[0], "1002", None),
+        (SOURCE_IDS[1], "1003", "https://shopee.com.br/product/1003"),
+        (SOURCE_IDS[2], "1004", "https://shopee.com.br/product/1004"),
+    )
     result = []
-    for index, source_id in enumerate(SOURCE_IDS, start=1):
-        message_id = str(1000 + index)
+    for index, (source_id, message_id, original_url) in enumerate(entries, start=1):
         result.append(
             SimpleNamespace(
                 telegram_message_id=message_id,
                 source_id=source_id,
                 topic_id=index * 10,
                 topic_name=f"topic-{index}",
-                original_url=f"https://shopee.com.br/product/{message_id}",
+                original_url=original_url,
                 source_path=None,
                 materialize=lambda _target: (_ for _ in ()).throw(
                     AssertionError("Sync/Vision não podem baixar mídia")
@@ -91,7 +98,6 @@ def _messages():
             )
         )
     return result
-
 
 def _coordinator(root, messages, studio, publisher):
     storage = Storage(root)
@@ -112,12 +118,19 @@ def test_sync_vision_stock_are_durable_separate_stages_end_to_end(tmp_path, monk
     sync_coordinator, sync_source = _coordinator(tmp_path, messages, studio, publisher)
     try:
         sync_report = asyncio.run(run_catch_up_stage(sync_coordinator, "sync"))
-        assert sync_report["processed"] == 3
+        assert sync_report["processed"] == 4
         assert sync_report["historical_scan_exhausted"] is True
         assert sync_report["historical_complete"] is False
         assert sync_source.downloads == []
-        assert all(not sync_coordinator.db.get(f"{sid}_{1000 + i}").original_path.is_file()
-                   for i, sid in enumerate(SOURCE_IDS, start=1))
+        assert all(
+            not sync_coordinator.db.get(f"{source_id}_{message_id}").original_path.is_file()
+            for source_id, message_id, _url in (
+                (SOURCE_IDS[0], "1001", "url"),
+                (SOURCE_IDS[0], "1002", None),
+                (SOURCE_IDS[1], "1003", "url"),
+                (SOURCE_IDS[2], "1004", "url"),
+            )
+        )
     finally:
         sync_coordinator.close()
 
@@ -125,14 +138,21 @@ def test_sync_vision_stock_are_durable_separate_stages_end_to_end(tmp_path, monk
     vision_coordinator, vision_source = _coordinator(tmp_path, messages, studio, publisher)
     try:
         vision_report = asyncio.run(run_catch_up_stage(vision_coordinator, "vision"))
-        assert vision_report["processed"] == 3
+        assert vision_report["processed"] == 4
         assert vision_report["outcomes"]["approved"] == 3
+        assert vision_report["outcomes"]["waiting_vision"] == 1
         assert vision_report["errors"] == []
         assert vision_source.downloads == []
-        for index, source_id in enumerate(SOURCE_IDS, start=1):
-            item = vision_coordinator.db.get(f"{source_id}_{1000 + index}")
-            assert item.state == State.RECEIVED
-            assert item.affiliate_url
+        expected_vision = (
+            (SOURCE_IDS[0], "1001", State.RECEIVED, True),
+            (SOURCE_IDS[0], "1002", State.WAITING_VISION, False),
+            (SOURCE_IDS[1], "1003", State.RECEIVED, True),
+            (SOURCE_IDS[2], "1004", State.RECEIVED, True),
+        )
+        for source_id, message_id, expected_state, has_affiliate in expected_vision:
+            item = vision_coordinator.db.get(f"{source_id}_{message_id}")
+            assert item.state == expected_state
+            assert bool(item.affiliate_url) is has_affiliate
             assert not item.original_path.is_file()
     finally:
         vision_coordinator.close()
@@ -145,11 +165,14 @@ def test_sync_vision_stock_are_durable_separate_stages_end_to_end(tmp_path, monk
         assert stock_report["outcomes"]["downloaded"] == 3
         assert stock_report["errors"] == []
         assert stock_source.downloads == [
-            (source_id, str(1000 + index))
-            for index, source_id in enumerate(SOURCE_IDS, start=1)
+            (SOURCE_IDS[0], "1001"),
+            (SOURCE_IDS[1], "1003"),
+            (SOURCE_IDS[2], "1004"),
         ]
-        for index, source_id in enumerate(SOURCE_IDS, start=1):
-            message_id = str(1000 + index)
+        for index, (source_id, message_id) in enumerate(
+            ((SOURCE_IDS[0], "1001"), (SOURCE_IDS[1], "1003"), (SOURCE_IDS[2], "1004")),
+            start=1,
+        ):
             item = stock_coordinator.db.get(f"{source_id}_{message_id}")
             assert item.state == State.RECEIVED
             assert item.original_path.is_file()
