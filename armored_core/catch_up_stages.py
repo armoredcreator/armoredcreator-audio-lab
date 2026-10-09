@@ -91,7 +91,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     if callable(marker):
                         marker(message_id)
                     per_source[source_id] += 1
-                    processed.append(item_id)
+                    processed_count += 1
                     if processed_count % 100 == 0:
                         log.info("[SYNC] reservas confirmadas=%s", processed_count)
                 except Exception as exc:
