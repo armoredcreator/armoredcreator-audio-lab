@@ -405,7 +405,13 @@ class TelegramSource:
                 title = str(getattr(topic, "title", None) or topic_id).strip()
                 topics.append((topic_id, title))
                 new_topics.append(topic)
-            if not page or not new_topics or len(page) < 100:
+            if not page:
+                break
+            if not new_topics:
+                raise RuntimeError(
+                    "forum-topic-pagination-stalled; refusing incomplete historical discovery"
+                )
+            if len(page) < 100:
                 break
 
             last = page[-1]
@@ -413,7 +419,9 @@ class TelegramSource:
             next_id = int(getattr(last, "top_message", 0) or 0)
             next_date = getattr(last, "date", None)
             if not next_topic or next_topic == offset_topic:
-                break
+                raise RuntimeError(
+                    "forum-topic-pagination-offset-stalled; refusing incomplete historical discovery"
+                )
             offset_topic, offset_id, offset_date = next_topic, next_id, next_date
             result = await self.reader.client(
                 functions.messages.GetForumTopicsRequest(
@@ -463,10 +471,14 @@ class TelegramSource:
             ids = [int(getattr(m, "id", 0) or 0) for m in messages]
             ids = [value for value in ids if value > 0]
             if not ids:
-                return
+                raise RuntimeError(
+                    f"topic-history-page-without-message-ids:{topic_id}"
+                )
             oldest = min(ids)
-            if oldest == offset_id:
-                return
+            if offset_id and oldest >= offset_id:
+                raise RuntimeError(
+                    f"topic-history-pagination-stalled:{topic_id}:offset={offset_id}:oldest={oldest}"
+                )
             offset_id = oldest
 
     async def _download_to(self, message: Any, target: Path) -> None:
