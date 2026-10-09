@@ -31,6 +31,18 @@ class Pipeline:
                 self.cleanup(item_id)
             self.trace.emit(item_id, "PIPELINE", "END", state=State.PUBLISHED.value, cleanup=item.cleanup_completed)
             return
+        # stop_after_vision is a hard boundary, not merely a flag checked after
+        # identifying a new product. Already-approved rows must return here
+        # before RECEIVED can transition to IA/Studio or any later tool.
+        if stop_after_vision and str(item.affiliate_url or "").strip():
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "STOP_AFTER_VISION",
+                state=item.state.value,
+                approved=True,
+            )
+            return
         try:
             self.db.record_attempt(item_id)
             # Vision V1 validates the Shopee product from the URL alone.
