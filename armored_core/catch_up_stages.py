@@ -59,7 +59,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         {str(candidate.source_id): 0 for candidate in source_list}
     )
     errors: list[str] = []
-    processed: list[str] = []
+    processed_count = 0
     skipped_existing_original = 0
 
     if stage == "sync":
@@ -92,8 +92,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                         marker(message_id)
                     per_source[source_id] += 1
                     processed.append(item_id)
-                    if len(processed) % 100 == 0:
-                        log.info("[SYNC] reservas confirmadas=%s", len(processed))
+                    if processed_count % 100 == 0:
+                        log.info("[SYNC] reservas confirmadas=%s", processed_count)
                 except Exception as exc:
                     errors.append(f"sync:{source_id}:{message_id}:{exc}")
                     log.error(
@@ -143,9 +143,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 coordinator.pipeline.run(item.content_id, stop_after_vision=True)
                 current = coordinator.db.get(item.content_id)
                 per_source[str(current.source_id)] += 1
-                processed.append(item.content_id)
-                if len(processed) % 10 == 0:
-                    log.info("[VISION] candidatos avaliados=%s", len(processed))
+                processed_count += 1
+                if processed_count % 10 == 0:
+                    log.info("[VISION] candidatos avaliados=%s", processed_count)
                 if current.state == State.RECOVERY:
                     errors.append(f"vision:{item.content_id}:falha técnica em RECOVERY")
             except Exception as exc:
@@ -237,9 +237,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 if not current.original_path.is_file():
                     raise FileNotFoundError(f"original ausente após download: {current.original_path}")
                 per_source[str(current.source_id)] += 1
-                processed.append(item.content_id)
-                if len(processed) % 10 == 0:
-                    log.info("[STOCK] originais baixados=%s", len(processed))
+                processed_count += 1
+                if processed_count % 10 == 0:
+                    log.info("[STOCK] originais baixados=%s", processed_count)
             except Exception as exc:
                 errors.append(f"stock:{item.content_id}:{exc}")
                 marker = getattr(source, "mark_materialization_failed", None)
@@ -255,7 +255,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
 
     outcomes: dict[str, int] = {}
     if stage == "sync":
-        outcomes["reserved"] = len(processed)
+        outcomes["reserved"] = processed_count
     elif stage == "vision":
         outcomes["approved"] = int(approved)
         outcomes["waiting_vision"] = int(waiting)
@@ -263,7 +263,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         outcomes["recovered_pre_download_recovery"] = len(pre_download_recovery)
         outcomes["recovered_approved_evidence"] = len(interrupted_approved)
     else:
-        outcomes["downloaded"] = len(processed)
+        outcomes["downloaded"] = processed_count
         outcomes["skipped_existing_original"] = skipped_existing_original
         remaining = sum(
             1
@@ -276,7 +276,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
 
     report = {
         "stage": stage,
-        "processed": len(processed),
+        "processed": processed_count,
         "per_source": dict(per_source),
         "outcomes": outcomes,
         "errors": errors,
