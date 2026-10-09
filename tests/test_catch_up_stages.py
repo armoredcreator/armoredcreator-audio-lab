@@ -235,6 +235,73 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(report["processed"], 0)
         self.assertEqual(report["errors"], [])
 
+    def test_vision_stops_on_first_technical_failure_to_preserve_order(self):
+        items = [
+            make_item(source_id, 250 + index, Path(tempfile.gettempdir()) / f"vision-fail-{source_id}.mp4")
+            for index, source_id in enumerate(SOURCE_IDS, start=1)
+        ]
+        source = FakeSource()
+        db = FakeDB(items)
+        coordinator = FakeCoordinator(source, db)
+
+        class FailingPipeline:
+            def __init__(self):
+                self.calls = []
+
+            def run(self, item_id, *, stop_after_vision=False):
+                self.calls.append((item_id, stop_after_vision))
+                if item_id == items[1].content_id:
+                    raise RuntimeError("vision-provider-timeout")
+                item = db.get(item_id)
+                item.affiliate_url = "https://example.invalid/approved"
+                item.state = State.RECEIVED
+
+        coordinator.pipeline = FailingPipeline()
+        report = asyncio.run(run_catch_up_stage(coordinator, "vision"))
+
+        self.assertEqual(
+            coordinator.pipeline.calls,
+            [(items[0].content_id, True), (items[1].content_id, True)],
+        )
+        self.assertEqual(report["processed"], 1)
+        self.assertEqual(len(report["errors"]), 1)
+        self.assertFalse(items[2].affiliate_url)
+
+    def test_stock_stops_on_first_download_failure_to_preserve_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            items = [
+                make_item(source_id, 350 + index, Path(td) / source_id / f"{350 + index}.mp4")
+                for index, source_id in enumerate(SOURCE_IDS, start=1)
+            ]
+            for item in items:
+                item.affiliate_url = "https://example.invalid/approved"
+
+            class FailingSource(FakeSource):
+                def __init__(self):
+                    super().__init__()
+                    self.attempts = []
+
+                async def materialize_candidate_async(self, source_id, message_id, target):
+                    self.attempts.append((str(source_id), str(message_id)))
+                    if str(source_id) == SOURCE_IDS[1]:
+                        raise RuntimeError("telegram-download-failed")
+                    await super().materialize_candidate_async(source_id, message_id, target)
+
+            source = FailingSource()
+            db = FakeDB(items)
+            coordinator = FakeCoordinator(source, db)
+
+            report = asyncio.run(run_catch_up_stage(coordinator, "stock"))
+
+            self.assertEqual(
+                source.attempts,
+                [(SOURCE_IDS[0], "351"), (SOURCE_IDS[1], "352")],
+            )
+            self.assertEqual(report["processed"], 1)
+            self.assertEqual(len(report["errors"]), 1)
+            self.assertFalse(items[2].original_path.is_file())
+            self.assertEqual(coordinator.production_calls, 0)
+
     def test_stock_downloads_only_approved_items_in_source_order_and_never_produces(self):
         with tempfile.TemporaryDirectory() as td:
             items = [
