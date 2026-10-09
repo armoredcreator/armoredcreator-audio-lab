@@ -63,6 +63,12 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     skipped_existing_original = 0
 
     if stage == "sync":
+        if bool(getattr(source, "historical_collection_limited", False)):
+            raise RuntimeError(
+                "ARMORED_SYNC_CATCHUP_LIMIT está configurado com limite finito; "
+                "para coleta histórica completa, remova a variável ou configure 0. "
+                "Nenhum candidato foi reservado nesta execução."
+            )
         iterator_factory = getattr(source, "iter_historical_candidates_async", None)
         if not callable(iterator_factory):
             raise RuntimeError("Sync source não implementa iter_historical_candidates_async()")
