@@ -43,6 +43,7 @@ class Coordinator:
         bindings: Any | None = None,
         *,
         acquire_runtime_lock: bool = False,
+        staged: bool = False,
     ):
         storage = Storage(root)
         # Project-local credential source of truth.
@@ -72,20 +73,30 @@ class Coordinator:
             return coordinator
 
         if bindings is None:
-            from ArmoredHub.service import ArmoredHub
-            from ArmoredStudio.service import ArmoredStudio
             from ArmoredVision.service import ArmoredVision
-            from ArmoredIA.service import ArmoredIA
             from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
 
             vision = ArmoredVision()
-            ia = ArmoredIA()
-            studio = ArmoredStudio(storage.root)
             routes = load_routes()
             legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
             for route in routes:
                 db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
-            publisher = ArmoredHub(storage.root, db, routes=routes)
+
+            if staged:
+                # The first three catch-up stages require only Sync, Vision and
+                # SQLite. Do not instantiate Studio/RVC, IA or Hub/publishing.
+                ia = None
+                studio = None
+                publisher = None
+            else:
+                from ArmoredHub.service import ArmoredHub
+                from ArmoredStudio.service import ArmoredStudio
+                from ArmoredIA.service import ArmoredIA
+
+                ia = ArmoredIA()
+                studio = ArmoredStudio(storage.root)
+                publisher = ArmoredHub(storage.root, db, routes=routes)
+
             if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
                 api_id = os.getenv("TELEGRAM_API_ID")
                 api_hash = os.getenv("TELEGRAM_API_HASH")
