@@ -138,7 +138,7 @@ class CatchUpStageTests(unittest.TestCase):
                          ["source-1", "source-2", "source-3"])
         self.assertEqual(source.downloads, [])
         self.assertEqual(coordinator.pipeline.calls, [])
-        self.assertEqual(coordinator.production_calls, [])
+        self.assertEqual(coordinator.production_calls, 0)
         self.assertFalse(report["historical_complete"])
 
     def test_vision_only_calls_vision_gate_and_does_not_download_or_produce(self):
