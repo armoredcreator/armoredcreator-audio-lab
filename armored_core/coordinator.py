@@ -105,8 +105,14 @@ class Coordinator:
                 )
             else:
                 source = LocalSource(storage.root / "input")
-            return cls(db, storage, vision, studio, publisher, source, ia)
-        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source, getattr(bindings, "ia", None))
+            return make_coordinator(vision, studio, publisher, source, ia)
+        return make_coordinator(
+            bindings.vision,
+            bindings.studio,
+            bindings.publisher,
+            bindings.source,
+            getattr(bindings, "ia", None),
+        )
 
     async def _ensure_source_connection(self) -> None:
         """Reconnect a real Telegram source before materializing the next item."""
