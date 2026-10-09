@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from armored_core.catch_up_stages import VALID_STAGES, run_catch_up_stage
@@ -41,6 +42,8 @@ def main() -> int:
     logging.getLogger("armored_core.services").setLevel(logging.CRITICAL)
     logging.getLogger("ArmoredSync.service").setLevel(logging.CRITICAL)
     logging.getLogger("armored_core.catch_up_stages").setLevel(logging.CRITICAL)
+    # Show compact Vision phase timings without enabling provider/library noise.
+    logging.getLogger("ArmoredVision.service").setLevel(logging.INFO)
 
     coordinator = None
     try:
@@ -55,7 +58,9 @@ def main() -> int:
                 f"encontradas {len(routes)}."
             )
         print(f"[CATCH-UP] INÍCIO etapa={args.stage.upper()}")
+        stage_started = time.perf_counter()
         report = asyncio.run(run_catch_up_stage(coordinator, args.stage))
+        stage_elapsed = time.perf_counter() - stage_started
 
         source_counts = report.get("per_source", {})
         source_summary = ",".join(
@@ -88,7 +93,8 @@ def main() -> int:
         print(
             f"[CATCH-UP] {status} etapa={args.stage.upper()} "
             f"processados={report.get('processed', 0)} {source_summary} "
-            f"{detail} erros={len(errors)} checkpoint=preservado"
+            f"{detail} erros={len(errors)} duracao={stage_elapsed / 60:.1f}min "
+            f"checkpoint=preservado"
         )
         for error in errors[:10]:
             print(f"[CATCH-UP][ERRO] {error}")

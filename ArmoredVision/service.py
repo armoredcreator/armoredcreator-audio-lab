@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import time
+from collections import OrderedDict
+
 from armored_core.models import Item
 from armored_core.services import VisionResult, VisionUnresolvedError
 
@@ -10,16 +14,25 @@ from .modules.v1.shopee_api import (
 )
 from .modules.v1.shopee_resolver import resolve_short_url
 
+log = logging.getLogger(__name__)
+_RESOLUTION_CACHE_TTL_SECONDS = 300
+_PRODUCT_CACHE_TTL_SECONDS = 15
+_CACHE_MAX_ENTRIES = 512
+
 
 class ArmoredVision:
-    """Affiliate identity stage.
+    """Affiliate identity stage with bounded, short-lived in-process memoization.
 
-    It owns Shopee resolution/API concerns only. Pipeline state remains in
-    armored_core and no JSON state from the legacy Vision is used.
+    Product approval is still based on an exact Shopee productOfferV2 lookup.
+    No result survives this process, and successful product results live for at
+    most 15 seconds so repeated messages for the same product do not hammer the
+    API while stale availability is not treated as durable evidence.
     """
 
     def __init__(self, api=None):
         self.api = api
+        self._resolution_cache: OrderedDict[str, tuple[float, object]] = OrderedDict()
+        self._product_cache: OrderedDict[tuple[str, str], tuple[float, dict]] = OrderedDict()
 
     @staticmethod
     def _ia_context(product: dict) -> dict:
@@ -35,51 +48,87 @@ class ArmoredVision:
             if key in product and product[key] not in (None, "", [], {})
         }
 
+    @staticmethod
+    def _cache_get(cache, key, ttl):
+        entry = cache.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if time.monotonic() >= expires_at:
+            cache.pop(key, None)
+            return None
+        cache.move_to_end(key)
+        # Cache values are immutable for resolution and copied for product data.
+        return value.copy() if isinstance(value, dict) else value
+
+    @staticmethod
+    def _cache_put(cache, key, value, ttl):
+        cache[key] = (time.monotonic() + ttl, value.copy() if isinstance(value, dict) else value)
+        cache.move_to_end(key)
+        while len(cache) > _CACHE_MAX_ENTRIES:
+            cache.popitem(last=False)
+
     def identify(self, item: Item) -> VisionResult:
+        started = time.perf_counter()
         original = (item.original_url or "").strip()
         if not original:
             raise VisionUnresolvedError(
                 "Vision não recebeu link Shopee; vídeo preservado em WAITING_VISION"
             )
 
-        try:
-            resolved = resolve_short_url(original)
-        except ValueError as exc:
-            # A syntactically valid Shopee/creator URL that does not identify
-            # one exact product is a Vision classification outcome, not a
-            # technical pipeline failure. Persist WAITING_VISION so historical
-            # catch-up can advance without retrying the same non-product URL.
-            raise VisionUnresolvedError(
-                f"Vision V1 não conseguiu identificar um produto Shopee exato: {original}"
-            ) from exc
+        phase_started = time.perf_counter()
+        resolved = self._cache_get(
+            self._resolution_cache, original, _RESOLUTION_CACHE_TTL_SECONDS
+        )
+        resolution_cache_hit = resolved is not None
+        if not resolution_cache_hit:
+            try:
+                resolved = resolve_short_url(original)
+            except ValueError as exc:
+                raise VisionUnresolvedError(
+                    f"Vision V1 não conseguiu identificar um produto Shopee exato: {original}"
+                ) from exc
+            self._cache_put(
+                self._resolution_cache, original, resolved, _RESOLUTION_CACHE_TTL_SECONDS
+            )
+        resolution_seconds = time.perf_counter() - phase_started
 
-        api = self.api or ShopeeAffiliateAPI()
-        try:
-            product = api.get_exact_product(resolved.shop_id, resolved.item_id)
-        except ShopeeProductNotFoundError as exc:
-            raise VisionUnresolvedError(
-                f"Vision V1 não resolveu o produto Shopee "
-                f"{resolved.shop_id}:{resolved.item_id}; "
-                "item preservado para futura recuperação"
-            ) from exc
+        api = self.api
+        if api is None:
+            api = ShopeeAffiliateAPI()
+            self.api = api
 
-        # The incoming URL is identification input only. The final affiliate
-        # link must come from the exact V1-resolved product, never from a
-        # third-party affiliate short URL supplied by the source message.
+        phase_started = time.perf_counter()
+        product_key = (str(resolved.shop_id), str(resolved.item_id))
+        product = self._cache_get(
+            self._product_cache, product_key, _PRODUCT_CACHE_TTL_SECONDS
+        )
+        product_cache_hit = product is not None
+        if not product_cache_hit:
+            try:
+                product = api.get_exact_product(*product_key)
+            except ShopeeProductNotFoundError as exc:
+                raise VisionUnresolvedError(
+                    f"Vision V1 não resolveu o produto Shopee "
+                    f"{resolved.shop_id}:{resolved.item_id}; "
+                    "item preservado para futura recuperação"
+                ) from exc
+            self._cache_put(
+                self._product_cache, product_key, product, _PRODUCT_CACHE_TTL_SECONDS
+            )
+        product_seconds = time.perf_counter() - phase_started
+
+        phase_started = time.perf_counter()
         try:
             affiliate_url = str(api.affiliate_link_for_product(product) or "").strip()
         except ShopeeAPIError as exc:
-            # A product record without a canonical product URL is not an
-            # accepted affiliate offer. Preserve it as WAITING_VISION rather
-            # than treating it as approved or repeatedly retrying a known
-            # unavailable offer. Other Shopee API errors remain technical
-            # failures so they can be retried safely.
             if "não possui productLink canônico" in str(exc):
                 raise VisionUnresolvedError(
                     "Vision encontrou o produto, mas não há link canônico "
                     "para gerar oferta de afiliado; item preservado em WAITING_VISION"
                 ) from exc
             raise
+        link_seconds = time.perf_counter() - phase_started
 
         if not affiliate_url.lower().startswith(("https://", "http://")):
             raise VisionUnresolvedError(
@@ -91,6 +140,17 @@ class ArmoredVision:
             product.get("productName")
             or product.get("itemId")
             or f"{resolved.shop_id}_{resolved.item_id}"
+        )
+        log.info(
+            "[VISION-TIMING] item=%s resolve=%.3fs resolve_cache=%s "
+            "product_offer=%.3fs product_cache=%s affiliate_link=%.3fs total=%.3fs",
+            getattr(item, "content_id", "<sem-content-id>"),
+            resolution_seconds,
+            "hit" if resolution_cache_hit else "miss",
+            product_seconds,
+            "hit" if product_cache_hit else "miss",
+            link_seconds,
+            time.perf_counter() - started,
         )
 
         return VisionResult(
