@@ -51,7 +51,7 @@ class Pipeline:
             if not stop_after_vision and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
-                if item.affiliate_url:
+                if str(item.affiliate_url or "").strip():
                     next_state = (
                         State.IA
                         if self.ia is not None
@@ -73,7 +73,7 @@ class Pipeline:
                     self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
             elif item.state == State.RECOVERY:
                 result = item.result_path
-                if not result and item.affiliate_url:
+                if not result and str(item.affiliate_url or "").strip():
                     result = self.storage.result(
                         item_id,
                         item.affiliate_url,
