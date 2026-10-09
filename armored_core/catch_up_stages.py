@@ -201,84 +201,15 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         )
 
     else:  # stock
-        pending_vision = coordinator.db.pending_vision_candidates()
-        interrupted_approved = coordinator.db.vision_approved_interrupted_items()
-        invalid_recovery = coordinator.db.pre_download_recovery_items()
-        if pending_vision or interrupted_approved or invalid_recovery:
-            raise RuntimeError(
-                "ArmoredStock bloqueado: Vision ainda tem candidatos sem decisão "
-                "ou evidência interrompida. Execute Vision até terminar sem erro; "
-                "nenhum download foi iniciado."
-            )
-        candidates = _ordered(coordinator.db.pending_vision_approved_items(), source)
-        for item in candidates:
-            if item.state != State.RECEIVED or not item.affiliate_url:
-                continue
-            if item.original_path.is_file():
-                skipped_existing_original += 1
-                continue
+        from .armored_stock import ArmoredStock
 
-            # Rows created by earlier lab iterations may contain the old
-            # source-prefixed/product-tail path. Keep any existing immutable
-            # original untouched; repair only missing paths before a new download.
-            canonical_original = coordinator.storage.original(
-                item.content_id,
-                ".mp4",
-                original_url=item.original_url,
-                source_id=item.source_id,
-            )
-            if item.original_path != canonical_original:
-                old_path = item.original_path
-                if old_path.name and old_path.suffix:
-                    stale_partial = old_path.with_suffix(old_path.suffix + ".part")
-                    if stale_partial.is_file():
-                        stale_partial.unlink()
-                coordinator.db.repair_original_path(item.content_id, canonical_original)
-                item = coordinator.db.get(item.content_id)
-
-            async def materialize(
-                target,
-                source_id=item.source_id,
-                message_id=item.telegram_message_id,
-            ):
-                if hasattr(source, "sources"):
-                    await source.materialize_candidate_async(source_id, message_id, target)
-                else:
-                    if str(source.source_id) != str(source_id):
-                        raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
-                    await source.materialize_candidate_async(message_id, target)
-
-            ingest = IngestMessage(
-                telegram_message_id=item.telegram_message_id,
-                source_id=item.source_id,
-                topic_id=item.topic_id,
-                topic_name=item.topic_name,
-                original_url=item.original_url,
-                materialize=materialize,
-            )
-            try:
-                await coordinator._ensure_source_connection()
-                try:
-                    await coordinator.sync.materialize_message_async(ingest)
-                finally:
-                    await coordinator._release_source_connection()
-                current = coordinator.db.get(item.content_id)
-                if not current.original_path.is_file():
-                    raise FileNotFoundError(f"original ausente após download: {current.original_path}")
-                per_source[str(current.source_id)] += 1
-                processed_count += 1
-            except Exception as exc:
-                errors.append(f"stock:{item.content_id}:{exc}")
-                marker = getattr(source, "mark_materialization_failed", None)
-                if callable(marker):
-                    marker()
-                log.error(
-                    "[CATCH-UP][STOCK] Falha item=%s: %s",
-                    item.content_id,
-                    exc,
-                )
-                # Do not let a later source/item overtake a failed download.
-                break
+        stock_report = await ArmoredStock(coordinator).run()
+        processed_count = int(stock_report["processed"])
+        per_source.update(stock_report["per_source"])
+        skipped_existing_original = int(
+            stock_report["outcomes"]["skipped_existing_original"]
+        )
+        errors.extend(stock_report["errors"])
 
     outcomes: dict[str, int] = {}
     if stage == "sync":
@@ -294,14 +225,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     else:
         outcomes["downloaded"] = processed_count
         outcomes["skipped_existing_original"] = skipped_existing_original
-        remaining = sum(
-            1
-            for candidate in coordinator.db.pending_vision_approved_items()
-            if candidate.state == State.RECEIVED
-            and candidate.affiliate_url
-            and not candidate.original_path.is_file()
+        outcomes["approved_missing_original"] = int(
+            stock_report["outcomes"]["approved_missing_original"]
         )
-        outcomes["approved_missing_original"] = int(remaining)
 
     report = {
         "stage": stage,

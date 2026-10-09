@@ -26,13 +26,19 @@ Classifica candidatos duráveis elegíveis com `stop_after_vision=True`. Vídeos
 
 ## 3. ArmoredStock nas três fontes
 
-Depois de revisar o relatório da Vision, execute explicitamente:
+Depois de revisar o relatório da Vision, o ArmoredStock pode ser executado como ferramenta independente:
 
 ```powershell
-python .\run_catchup_stage.py stock
+python .\\run_armored_stock.py
 ```
 
-Só começa se não houver candidatos aguardando decisão da Vision. Baixa, um por vez, somente originais aprovados pela Vision; a primeira falha interrompe a etapa para preservar a ordem. Não executa IA, Studio/RVC, Hub, Telegram/publicação, cleanup ou LIVE.
+O comando dedicado executa somente a materialização dos originais aprovados e encerra. A etapa equivalente continua disponível no orquestrador de catch-up:
+
+```powershell
+python .\\run_catchup_stage.py stock
+```
+
+O ArmoredStock bloqueia o início se houver candidatos aguardando decisão da Vision ou evidência de Vision interrompida. Baixa, um por vez, somente originais aprovados; a primeira falha interrompe a ordem para permitir retomada segura. Usa o Coordinator como raiz de composição, o SQLite existente como fonte de verdade e o Sync para materializar os arquivos. Não executa Vision, IA, Studio/RVC, Hub, Telegram/publicação, cleanup ou LIVE.
 
 ## Parada obrigatória após ArmoredStock
 
