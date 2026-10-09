@@ -155,6 +155,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     item.content_id,
                     exc,
                 )
+                # Keep strict source/message ordering: retry this candidate
+                # before allowing a later candidate to overtake it.
+                break
         # WAITING_VISION is a durable, expected outcome, not a technical failure.
         waiting = coordinator.db.conn.execute(
             "SELECT COUNT(*) FROM items WHERE state=?",
@@ -247,6 +250,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     item.content_id,
                     exc,
                 )
+                # Do not let a later source/item overtake a failed download.
+                break
 
     outcomes: dict[str, int] = {}
     if stage == "sync":
