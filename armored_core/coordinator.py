@@ -1145,10 +1145,12 @@ class Coordinator:
         self.recovery.reconcile(item_id)
 
     def close(self) -> None:
-        if self._runtime_lock_held:
-            self.db.release_runtime_lock("coordinator")
+        try:
+            if self._runtime_lock_held:
+                self.db.release_runtime_lock("coordinator")
+        finally:
             self._runtime_lock_held = False
-        self.db.close()
+            self.db.close()
 
     def process_next(self):
         item_id = self.ingest_once()
