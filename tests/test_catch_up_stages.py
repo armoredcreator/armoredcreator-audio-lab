@@ -41,6 +41,12 @@ class FakeDB:
             execute=lambda _sql, _params=(): SimpleNamespace(fetchone=lambda: (0,))
         )
 
+    def pre_download_recovery_items(self):
+        return [
+            item for item in self.items.values()
+            if item.state == State.RECOVERY and not item.original_path.is_file()
+        ]
+
     def vision_approved_interrupted_items(self):
         return [
             item for item in self.items.values()
@@ -191,6 +197,24 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(source.downloads, [])
         self.assertEqual(coordinator.production_calls, 0)
         self.assertEqual(report["processed"], 3)
+
+    def test_vision_retries_legacy_recovery_without_original(self):
+        item = make_item(
+            SOURCE_IDS[0],
+            198,
+            Path(tempfile.gettempdir()) / "vision-legacy-recovery.mp4",
+        )
+        item.state = State.RECOVERY
+        source = FakeSource()
+        db = FakeDB([item])
+        coordinator = FakeCoordinator(source, db)
+
+        report = asyncio.run(run_catch_up_stage(coordinator, "vision"))
+
+        self.assertEqual(item.state, State.RECEIVED)
+        self.assertEqual(coordinator.pipeline.calls, [(item.content_id, True)])
+        self.assertEqual(report["outcomes"]["recovered_pre_download_recovery"], 1)
+        self.assertEqual(report["errors"], [])
 
     def test_vision_recovers_approved_evidence_after_crash_before_state_transition(self):
         item = make_item(
