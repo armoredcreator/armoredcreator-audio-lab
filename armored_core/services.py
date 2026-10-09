@@ -140,7 +140,7 @@ class SyncService:
         if original.exists():
             original.unlink()
 
-    def reserve_message(self, message: IngestMessage) -> int:
+    def reserve_message(self, message: IngestMessage) -> str:
         """Reserve one candidate in SQLite without downloading its media."""
         if message.source_path is None and message.materialize is None:
             raise ValueError("ingest-message-requires-source-path-or-materializer")
