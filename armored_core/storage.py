@@ -52,12 +52,22 @@ class Storage:
             index = int(match.group(1)) if match else 1
         return self.storage / f"Videos GRUPO_FONTE_{index}"
 
-    def workspace(self, telegram_message_id: str | int, source_id: str | int | None = None) -> Path:
-        """Return the canonical source-separated workspace for one content ID."""
-        content_id = str(telegram_message_id).strip()
-        if not content_id:
+    @staticmethod
+    def _telegram_message_id(content_id: str | int, source_id: str | int | None = None) -> str:
+        """Strip the source namespace from the internal SQLite key for disk names."""
+        value = str(content_id).strip()
+        source = str(source_id or "").strip()
+        prefix = f"{source}_"
+        if source and value.startswith(prefix):
+            value = value[len(prefix):]
+        if not value:
             raise ValueError("telegram-message-id-required")
-        path = self.source_workspace_root(source_id) / content_id
+        return value
+
+    def workspace(self, telegram_message_id: str | int, source_id: str | int | None = None) -> Path:
+        """Return the canonical source-separated workspace keyed by Telegram message ID."""
+        message_id = self._telegram_message_id(telegram_message_id, source_id)
+        path = self.source_workspace_root(source_id) / message_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -68,17 +78,12 @@ class Storage:
         original_url: str | None = None,
         source_id: str | None = None,
     ) -> Path:
-        content_id = str(content_id).strip()
-        if not content_id:
-            raise ValueError("content-id-required")
-        tail = affiliate_tail(original_url)
-        return self.workspace(content_id, source_id=source_id) / f"{content_id}_{tail}{suffix}"
+        message_id = self._telegram_message_id(content_id, source_id)
+        return self.workspace(message_id, source_id=source_id) / f"{message_id}_finallinkoriginal{suffix}"
 
     def working(self, content_id: str, source_id: str | None = None) -> Path:
-        content_id = str(content_id).strip()
-        if not content_id:
-            raise ValueError("content-id-required")
-        return self.workspace(content_id, source_id=source_id) / f"{content_id}_.mp4"
+        message_id = self._telegram_message_id(content_id, source_id)
+        return self.workspace(message_id, source_id=source_id) / f"{message_id}_.mp4"
 
     def result(
         self,
@@ -87,8 +92,5 @@ class Storage:
         affiliate_name: str | None = None,
         source_id: str | None = None,
     ) -> Path:
-        content_id = str(content_id).strip()
-        if not content_id:
-            raise ValueError("content-id-required")
-        tail = affiliate_tail(affiliate_url, affiliate_name)
-        return self.workspace(content_id, source_id=source_id) / f"{content_id}_{tail}.mp4"
+        message_id = self._telegram_message_id(content_id, source_id)
+        return self.workspace(message_id, source_id=source_id) / f"{message_id}_finaldomeulinknovo.mp4"
