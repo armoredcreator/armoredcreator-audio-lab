@@ -369,6 +369,20 @@ class TelegramSource:
         """
         from telethon import functions
 
+        # Detect the chat type before choosing the discovery path. A network,
+        # permission, or Telegram API failure must never silently turn a forum
+        # scan into a general-chat scan: doing so would lose source topic IDs
+        # and can route content to the wrong Hub topic.
+        try:
+            entity = await self.reader.client.get_entity(source)
+        except Exception as exc:
+            raise RuntimeError(
+                f"telegram-source-resolution-failed:{self.source_id}:{type(exc).__name__}"
+            ) from exc
+
+        if not bool(getattr(entity, "forum", False)):
+            return [(0, "Geral")]
+
         topics: list[tuple[int, str]] = []
         seen: set[int] = set()
         offset_topic = 0
@@ -386,11 +400,10 @@ class TelegramSource:
                 )
             )
         except Exception as exc:
-            logging.getLogger(__name__).info(
-                "[SYNC][DISCOVERY] Fonte sem listagem de tópicos; usando histórico geral (%s)",
-                type(exc).__name__,
-            )
-            return [(0, "Geral")]
+            raise RuntimeError(
+                f"forum-topic-discovery-failed:{self.source_id}:"
+                f"{type(exc).__name__}; refusing incomplete historical discovery"
+            ) from exc
 
         while True:
             page = list(getattr(result, "topics", []) or [])
@@ -435,7 +448,12 @@ class TelegramSource:
                 )
             )
 
-        return topics or [(0, "Geral")]
+        if not topics:
+            raise RuntimeError(
+                f"forum-topic-list-empty:{self.source_id}; "
+                "refusing to treat a forum as a general chat"
+            )
+        return topics
 
     async def _topic_messages(self, source: str, topic_id: int):
         """Stream history for one forum topic or for an ordinary Telegram chat."""
