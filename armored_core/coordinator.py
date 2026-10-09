@@ -66,6 +66,7 @@ class Coordinator:
         if staged:
             os.environ["ARMORED_REAL_TELEGRAM"] = "1"
             os.environ["ARMORED_REQUIRED_SOURCE_COUNT"] = "3"
+            os.environ["ARMORED_SYNC_VERBOSE_PROGRESS"] = "0"
 
         # Staged runs defer schema creation/migrations until after the
         # SQLite runtime lease is acquired. Opening a second Coordinator must
