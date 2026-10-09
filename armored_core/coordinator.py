@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ class Coordinator:
 
     def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
         self.db = db
+        self.log = logging.getLogger(__name__)
         self.storage = storage
         self.sync = SyncService(db, storage)
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
