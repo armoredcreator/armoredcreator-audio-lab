@@ -253,6 +253,24 @@ class TelegramSource:
         return self.mode == "LIVE"
 
     @staticmethod
+    def _is_video_message(message: Any) -> bool:
+        """Accept Telegram videos sent as media or as generic video documents."""
+        if message is None:
+            return False
+        if self._is_video_message(message):
+            return True
+        document = getattr(message, "document", None)
+        if document is None:
+            return False
+        mime_type = str(getattr(document, "mime_type", "") or "").lower()
+        if mime_type.startswith("video/"):
+            return True
+        return any(
+            "video" in type(attribute).__name__.lower()
+            for attribute in (getattr(document, "attributes", None) or ())
+        )
+
+    @staticmethod
     def _shopee_url(message: Any) -> str | None:
         if not message:
             return None
@@ -541,7 +559,7 @@ class TelegramSource:
         )
         if isinstance(message, (list, tuple)):
             message = next((value for value in message if value is not None), None)
-        if message is None or not getattr(message, "video", None):
+        if message is None or not self._is_video_message(message):
             raise RuntimeError(
                 f"historical-video-not-found:{self.source_id}:{telegram_message_id}"
             )
@@ -609,7 +627,7 @@ class TelegramSource:
         only videos that carry their own link are preserved automatically; links
         living only on photos remain ambiguous and are not guessed.
         """
-        videos = [message for message in messages if getattr(message, "video", None)]
+        videos = [message for message in messages if self._is_video_message(message)]
         if not videos:
             return []
 
@@ -738,7 +756,7 @@ class TelegramSource:
                 paired_pending_video = False
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
-                    if not getattr(message, "video", None):
+                    if not self._is_video_message(message):
                         original_url = self._shopee_url(message)
                         if original_url is not None:
                             paired_pending_video = True
@@ -986,7 +1004,7 @@ class TelegramSource:
                         original_url = self._shopee_url(message)
                         if original_url is None and index + 1 < len(messages):
                             next_message = messages[index + 1]
-                            if not getattr(next_message, "video", None):
+                            if not self._is_video_message(next_message):
                                 original_url = self._shopee_url(next_message)
                         if (
                             original_url is not None
