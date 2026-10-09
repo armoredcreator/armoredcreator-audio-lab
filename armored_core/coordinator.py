@@ -62,68 +62,81 @@ class Coordinator:
 
         db = Database(storage.database / "armoredcreator.db")
         runtime_lock_acquired = False
-        if acquire_runtime_lock:
-            # Acquire before route initialization or any staged database writes.
-            db.acquire_runtime_lock("coordinator")
-            runtime_lock_acquired = True
+        try:
+lse
+            if acquire_runtime_lock:
+                # Acquire before route initialization or any staged database writes.
+                db.acquire_runtime_lock("coordinator")
+                runtime_lock_acquired = True
 
-        def make_coordinator(vision, studio, publisher, source, ia=None):
-            coordinator = cls(db, storage, vision, studio, publisher, source, ia)
-            coordinator._runtime_lock_held = runtime_lock_acquired
-            return coordinator
+            def make_coordinator(vision, studio, publisher, source, ia=None):
+                coordinator = cls(db, storage, vision, studio, publisher, source, ia)
+                coordinator._runtime_lock_held = runtime_lock_acquired
+                return coordinator
 
-        if bindings is None:
-            from ArmoredVision.service import ArmoredVision
-            from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
+            if bindings is None:
+                from ArmoredVision.service import ArmoredVision
+                from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
 
-            vision = ArmoredVision()
-            routes = load_routes()
-            legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
-            for route in routes:
-                db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
+                vision = ArmoredVision()
+                routes = load_routes()
+                legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+                for route in routes:
+                    db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
 
-            if staged:
-                # The first three catch-up stages require only Sync, Vision and
-                # SQLite. Do not instantiate Studio/RVC, IA or Hub/publishing.
-                ia = None
-                studio = None
-                publisher = None
-            else:
-                from ArmoredHub.service import ArmoredHub
-                from ArmoredStudio.service import ArmoredStudio
-                from ArmoredIA.service import ArmoredIA
+                if staged:
+                    # The first three catch-up stages require only Sync, Vision and
+                    # SQLite. Do not instantiate Studio/RVC, IA or Hub/publishing.
+                    ia = None
+                    studio = None
+                    publisher = None
+                else:
+                    from ArmoredHub.service import ArmoredHub
+                    from ArmoredStudio.service import ArmoredStudio
+                    from ArmoredIA.service import ArmoredIA
 
-                ia = ArmoredIA()
-                studio = ArmoredStudio(storage.root)
-                publisher = ArmoredHub(storage.root, db, routes=routes)
+                    ia = ArmoredIA()
+                    studio = ArmoredStudio(storage.root)
+                    publisher = ArmoredHub(storage.root, db, routes=routes)
 
-            if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
-                api_id = os.getenv("TELEGRAM_API_ID")
-                api_hash = os.getenv("TELEGRAM_API_HASH")
-                if not api_id or not api_hash:
-                    raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH são obrigatórios")
-                reader = TelegramReader(storage.root, int(api_id), api_hash)
-                source = (
-                    MultiTelegramSource(storage.root, reader, db, routes)
-                    if len(routes) > 1
-                    else TelegramSource(
-                        storage.root,
-                        reader,
-                        db,
-                        source=(routes[0].source.chat_id if routes else None),
-                        source_id=(routes[0].source.source_id if routes else None),
+                if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
+                    api_id = os.getenv("TELEGRAM_API_ID")
+                    api_hash = os.getenv("TELEGRAM_API_HASH")
+                    if not api_id or not api_hash:
+                        raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH são obrigatórios")
+                    reader = TelegramReader(storage.root, int(api_id), api_hash)
+                    source = (
+                        MultiTelegramSource(storage.root, reader, db, routes)
+                        if len(routes) > 1
+                        else TelegramSource(
+                            storage.root,
+                            reader,
+                            db,
+                            source=(routes[0].source.chat_id if routes else None),
+                            source_id=(routes[0].source.source_id if routes else None),
+                        )
                     )
-                )
-            else:
-                source = LocalSource(storage.root / "input")
-            return make_coordinator(vision, studio, publisher, source, ia)
-        return make_coordinator(
-            bindings.vision,
-            bindings.studio,
-            bindings.publisher,
-            bindings.source,
-            getattr(bindings, "ia", None),
-        )
+                else:
+                    source = LocalSource(storage.root / "input")
+                return make_coordinator(vision, studio, publisher, source, ia)
+            return make_coordinator(
+                bindings.vision,
+                bindings.studio,
+                bindings.publisher,
+                bindings.source,
+                getattr(bindings, "ia", None),
+            )
+
+        except BaseException:
+            # If composition fails after acquiring the lease, do not strand
+            # the current PID as owner of SQLite and block the next safe retry.
+            if runtime_lock_acquired:
+                try:
+                    db.release_runtime_lock("coordinator")
+                except Exception:
+                    pass
+            db.close()
+            raise
 
     async def _ensure_source_connection(self) -> None:
         """Reconnect a real Telegram source before materializing the next item."""
