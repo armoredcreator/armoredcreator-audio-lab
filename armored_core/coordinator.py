@@ -66,13 +66,19 @@ class Coordinator:
         if staged:
             os.environ["ARMORED_REAL_TELEGRAM"] = "1"
 
-        db = Database(storage.database / "armoredcreator.db")
+        # Staged runs defer schema creation/migrations until after the
+        # SQLite runtime lease is acquired. Opening a second Coordinator must
+        # not write the database before discovering an active owner.
+        db = Database(
+            storage.database / "armoredcreator.db",
+            initialize=not acquire_runtime_lock,
+        )
         runtime_lock_acquired = False
         try:
             if acquire_runtime_lock:
-                # Acquire before route initialization or any staged database writes.
                 db.acquire_runtime_lock("coordinator")
                 runtime_lock_acquired = True
+                db.initialize()
 
             def make_coordinator(vision, studio, publisher, source, ia=None):
                 coordinator = cls(db, storage, vision, studio, publisher, source, ia)
