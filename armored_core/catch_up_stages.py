@@ -86,6 +86,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                         marker(message_id)
                     per_source[source_id] += 1
                     processed.append(item_id)
+                    if len(processed) % 100 == 0:
+                        log.info("[SYNC] reservas confirmadas=%s", len(processed))
                 except Exception as exc:
                     errors.append(f"sync:{source_id}:{message_id}:{exc}")
                     log.error(
@@ -124,6 +126,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 current = coordinator.db.get(item.content_id)
                 per_source[str(current.source_id)] += 1
                 processed.append(item.content_id)
+                if len(processed) % 10 == 0:
+                    log.info("[VISION] candidatos avaliados=%s", len(processed))
                 if current.state == State.RECOVERY:
                     errors.append(f"vision:{item.content_id}:falha técnica em RECOVERY")
             except Exception as exc:
@@ -148,7 +152,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             "AND (affiliate_url IS NULL OR TRIM(affiliate_url)='')",
             (State.VISION.value,),
         ).fetchone()[0]
-        log.info(
+        log.debug(
             "[CATCH-UP][VISION] aprovados=%s aguardando=%s retryable=%s",
             approved,
             waiting,
@@ -213,6 +217,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     raise FileNotFoundError(f"original ausente após download: {current.original_path}")
                 per_source[str(current.source_id)] += 1
                 processed.append(item.content_id)
+                if len(processed) % 10 == 0:
+                    log.info("[STOCK] originais baixados=%s", len(processed))
             except Exception as exc:
                 errors.append(f"stock:{item.content_id}:{exc}")
                 marker = getattr(source, "mark_materialization_failed", None)
@@ -261,5 +267,5 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             else coordinator.db.historical_complete()
         ),
     }
-    log.info("[CATCH-UP][%s] Relatório: %s", stage.upper(), report)
+    log.debug("[CATCH-UP][%s] Relatório: %s", stage.upper(), report)
     return report
