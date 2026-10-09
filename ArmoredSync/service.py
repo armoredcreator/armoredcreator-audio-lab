@@ -754,14 +754,15 @@ class TelegramSource:
                 paired_pending_video = False
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
-                    if not self._is_video_message(message):
-                        original_url = self._shopee_url(message)
-                        if original_url is not None:
-                            paired_pending_video = True
-                            if (
-                                pending_id not in self._seen
-                                and not self._shopee_url_exists(original_url)
-                            ):
+                    paired_pending_video = True
+                    original_url = (
+                        None
+                        if self._is_video_message(message)
+                        else self._shopee_url(message)
+                    )
+                    if pending_id not in self._seen:
+                        if original_url:
+                            if not self._shopee_url_exists(original_url):
                                 yield (
                                     pending_id,
                                     int(topic_id),
@@ -769,13 +770,22 @@ class TelegramSource:
                                     pending_message,
                                     original_url,
                                 )
+                        else:
+                            # Keep every video in SQLite even without a nearby
+                            # product URL; Vision will place it in WAITING_VISION.
+                            yield (
+                                pending_id,
+                                int(topic_id),
+                                topic_name,
+                                pending_message,
+                                None,
+                            )
                     pending_video = None
 
                 if not self._is_video_message(message):
-                    # In Telegram's newest-first forum pages, the product link
-                    # may be the immediately newer message than its video.
-                    # Keep it for the next video; ascending general-chat scans
-                    # are handled by the pending_video branch above.
+                    # In newest-first forum pages, a newer link may precede its
+                    # video; in general history the pending_video branch pairs
+                    # a link posted after the video.
                     pending_link = (
                         None
                         if paired_pending_video
@@ -823,18 +833,13 @@ class TelegramSource:
 
             if pending_video is not None:
                 pending_id, pending_message = pending_video
-                original_url = self._shopee_url(pending_message)
-                if (
-                    pending_id not in self._seen
-                    and original_url is not None
-                    and not self._shopee_url_exists(original_url)
-                ):
+                if pending_id not in self._seen:
                     yield (
                         pending_id,
                         int(topic_id),
                         topic_name,
                         pending_message,
-                        original_url,
+                        None,
                     )
 
             if topic_max_id and int(topic_id) > 0:
