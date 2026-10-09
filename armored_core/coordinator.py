@@ -65,6 +65,7 @@ class Coordinator:
         # inherited shell variable or a stale project.env setting.
         if staged:
             os.environ["ARMORED_REAL_TELEGRAM"] = "1"
+            os.environ["ARMORED_REQUIRED_SOURCE_COUNT"] = "3"
 
         # Staged runs defer schema creation/migrations until after the
         # SQLite runtime lease is acquired. Opening a second Coordinator must
