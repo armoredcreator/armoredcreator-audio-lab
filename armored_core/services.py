@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 from .database import Database
-from .models import Item, PublicationCheck
+from .models import Item, PublicationCheck, State
 
 
 class VisionUnresolvedError(RuntimeError):
