@@ -716,6 +716,19 @@ class TelegramSource:
 
                 grouped_id = getattr(message, "grouped_id", None)
                 if grouped_id is not None:
+                    # Close any standalone video before entering an album; its
+                    # adjacent link must not be borrowed from inside that album.
+                    if pending_video is not None:
+                        pending_id, pending_message = pending_video
+                        if pending_id not in self._seen:
+                            yield (
+                                pending_id,
+                                int(topic_id),
+                                topic_name,
+                                pending_message,
+                                None,
+                            )
+                        pending_video = None
                     # Album links are resolved within the album itself.
                     pending_link = None
                     grouped_id = int(grouped_id)
