@@ -181,6 +181,15 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         )
 
     else:  # stock
+        pending_vision = coordinator.db.pending_vision_candidates()
+        interrupted_approved = coordinator.db.vision_approved_interrupted_items()
+        invalid_recovery = coordinator.db.pre_download_recovery_items()
+        if pending_vision or interrupted_approved or invalid_recovery:
+            raise RuntimeError(
+                "ArmoredStock bloqueado: Vision ainda tem candidatos sem decisão "
+                "ou evidência interrompida. Execute Vision até terminar sem erro; "
+                "nenhum download foi iniciado."
+            )
         candidates = _ordered(coordinator.db.pending_vision_approved_items(), source)
         for item in candidates:
             if item.state != State.RECEIVED or not item.affiliate_url:
