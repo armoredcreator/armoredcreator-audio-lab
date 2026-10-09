@@ -149,6 +149,77 @@ class VisionBeforeDownloadTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
+    def test_stop_after_vision_is_a_hard_boundary_for_already_approved_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            studio = _Studio(storage)
+            publisher = _Publisher()
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionResolved(),
+                studio,
+                publisher,
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "already-approved",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/123",
+                    original_path=storage.original("already-approved"),
+                )
+                db.set_vision(
+                    item_id,
+                    "Produto",
+                    "https://affiliate.invalid/product",
+                    affiliate_urls=("https://affiliate.invalid/product",),
+                )
+
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                self.assertEqual(db.get(item_id).state, State.RECEIVED)
+                self.assertFalse(db.get(item_id).original_path.exists())
+                self.assertEqual(studio.calls, 0)
+                self.assertEqual(publisher.calls, 0)
+            finally:
+                coordinator.close()
+
+    def test_blank_affiliate_url_is_revalidated_before_any_production_stage(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            studio = _Studio(storage)
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionResolved(),
+                studio,
+                _Publisher(),
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "blank-affiliate",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/123",
+                    original_path=storage.original("blank-affiliate"),
+                )
+                db.set_vision(item_id, "produto antigo", "   ")
+
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.RECEIVED)
+                self.assertEqual(item.affiliate_url, "https://affiliate.invalid/product")
+                self.assertFalse(item.original_path.exists())
+                self.assertEqual(studio.calls, 0)
+            finally:
+                coordinator.close()
+
     def test_technical_vision_failure_never_downloads(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -175,7 +246,8 @@ class VisionBeforeDownloadTests(unittest.TestCase):
                         coordinator._vision_gate_and_materialize_async(message)
                     )
                 item = db.get("gate-technical")
-                self.assertEqual(item.state, State.RECOVERY)
+                self.assertEqual(item.state, State.VISION)
+                self.assertIn("vision-provider-timeout", db.last_error(item.content_id))
                 self.assertEqual(calls, [])
                 self.assertFalse(item.original_path.exists())
             finally:
@@ -260,11 +332,49 @@ class VisionBeforeDownloadTests(unittest.TestCase):
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
                 item = db.get("gate-rediscover")
-                self.assertEqual(source.reset_calls, 1)
-                self.assertEqual(vision.calls, 2)
-                self.assertEqual(item.state, State.PUBLISHED)
-                self.assertTrue(item.original_path.is_file())
-                self.assertTrue(db.historical_complete())
+                self.assertEqual(source.reset_calls, 0)
+                self.assertEqual(vision.calls, 1)
+                self.assertEqual(item.state, State.VISION)
+                self.assertFalse(item.original_path.is_file())
+                self.assertFalse(db.historical_complete())
+            finally:
+                coordinator.close()
+
+
+    def test_pre_download_technical_failure_stays_retryable_without_original(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionTechnicalFailure(),
+                _Studio(storage),
+                _Publisher(),
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "retryable-vision",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/retryable",
+                    original_path=storage.original("retryable-vision"),
+                )
+                with self.assertRaisesRegex(RuntimeError, "vision-provider-timeout"):
+                    coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.VISION)
+                self.assertFalse(item.original_path.is_file())
+                self.assertIn("vision-provider-timeout", db.last_error(item_id))
+
+                coordinator.pipeline.vision = _VisionResolved()
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.RECEIVED)
+                self.assertEqual(item.affiliate_url, "https://affiliate.invalid/product")
+                self.assertFalse(item.original_path.is_file())
             finally:
                 coordinator.close()
 

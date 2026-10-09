@@ -47,6 +47,11 @@ def test_repository_has_only_canonical_storage_roots():
         "storage/videos",
         "storage/logs",
         "storage/backups",
+        # Source-separated workspaces are canonical runtime storage, not
+        # legacy queues or duplicate storage trees.
+        "storage/Videos GRUPO_FONTE_1",
+        "storage/Videos GRUPO_FONTE_2",
+        "storage/Videos GRUPO_FONTE_3",
     }
     assert actual <= allowed
 

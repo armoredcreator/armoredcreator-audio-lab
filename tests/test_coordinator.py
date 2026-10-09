@@ -82,7 +82,7 @@ class CoordinatorTests(unittest.TestCase):
 
             self.assertEqual(item_id, "telegram-async-1")
             item = db.get(item_id)
-            self.assertEqual(item.original_path.name, "telegram-async-1_finaldomeulinknovo.mp4")
+            self.assertEqual(item.original_path.name, "telegram-async-1_finallinkoriginal.mp4")
             self.assertEqual(item.original_path.read_bytes(), b"ASYNC-TELEGRAM")
             self.assertFalse((root / "storage" / "sync").exists())
             self.assertEqual(source.marked, "telegram-async-1")

@@ -622,11 +622,11 @@ class SyncLifecycleTests(unittest.TestCase):
                 db, storage, FailOnceVision(), Studio(storage), publisher, source
             )
 
-            # Vision is now the pre-download gate: a technical failure leaves
-            # RECOVERY with no immutable ORIGINAL and must not download media.
+            # Vision is the pre-download gate: technical failure remains
+            # retryable in VISION while ORIGINAL is absent; no checkpoint/download.
             live = first.run_live_once()
             self.assertEqual(live, ["200"])
-            self.assertEqual(db.get("200").state.value, "RECOVERY")
+            self.assertEqual(db.get("200").state.value, "VISION")
             self.assertFalse(db.get("200").original_path.exists())
             first.close()
 

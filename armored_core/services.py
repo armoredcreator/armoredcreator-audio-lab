@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 from .database import Database
-from .models import Item, PublicationCheck
+from .models import Item, PublicationCheck, State
 
 
 class VisionUnresolvedError(RuntimeError):
@@ -83,13 +83,20 @@ class SyncService:
                 if not original.name:
                     stored_path = ""
             if not stored_path:
-                # Repair legacy rows deterministically from the stable Telegram ID + URL.
+                # Repair legacy rows deterministically from the stable Telegram ID.
                 original = self.storage.original(
                     item_id,
                     ".mp4",
                     original_url=existing["original_url"] or message.original_url,
                     source_id=message.source_id,
                 )
+                # Only incomplete .part artifacts are disposable. Remove stale
+                # partials in this item's workspace before restarting the download.
+                for stale_partial in original.parent.glob("*.part"):
+                    try:
+                        stale_partial.unlink()
+                    except FileNotFoundError:
+                        pass
                 self.db.repair_original_path(item_id, original)
             partial = original.with_suffix(original.suffix + ".part")
             return item_id, original, partial
@@ -133,18 +140,37 @@ class SyncService:
         if original.exists():
             original.unlink()
 
-    def reserve_message(self, message: IngestMessage) -> int:
+    def reserve_message(self, message: IngestMessage) -> str:
         """Reserve one candidate in SQLite without downloading its media."""
         if message.source_path is None and message.materialize is None:
             raise ValueError("ingest-message-requires-source-path-or-materializer")
         existing = self.db.conn.execute(
-            "SELECT content_id, original_path, original_url FROM items WHERE source_id=? AND telegram_message_id=?",
+            "SELECT content_id, original_path, original_url, state, affiliate_url "
+            "FROM items WHERE source_id=? AND telegram_message_id=?",
             (message.source_id, message.telegram_message_id),
         ).fetchone()
         if existing:
             item_id = str(existing["content_id"])
+            stored_url = str(existing["original_url"] or "").strip()
+            incoming_url = str(message.original_url or "").strip()
+            if not stored_url and incoming_url:
+                self.db.update_original_url(item_id, incoming_url)
+                if (
+                    str(existing["state"]) == State.WAITING_VISION.value
+                    and not str(existing["affiliate_url"] or "").strip()
+                ):
+                    self.db.transition(
+                        item_id,
+                        State.RECEIVED,
+                        "source-link-discovered-after-waiting-vision",
+                    )
             if not str(existing["original_path"] or "").strip():
-                original = self.storage.original(item_id, ".mp4", original_url=existing["original_url"] or message.original_url, source_id=message.source_id)
+                original = self.storage.original(
+                    item_id,
+                    ".mp4",
+                    original_url=stored_url or incoming_url,
+                    source_id=message.source_id,
+                )
                 self.db.repair_original_path(item_id, original)
             return item_id
         suffix = message.source_path.suffix if message.source_path is not None and message.source_path.suffix else ".mp4"

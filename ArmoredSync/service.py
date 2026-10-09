@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -179,14 +180,15 @@ class TelegramSource:
             return None
         try:
             value = int(raw)
-        except ValueError:
-            print(f"[SYNC][CATCH-UP] Limite inválido {raw!r}; CATCH-UP completo.")
-            return None
+        except ValueError as exc:
+            raise ValueError(
+                "ARMORED_SYNC_CATCHUP_LIMIT deve ser 0 (ilimitado) ou inteiro positivo"
+            ) from exc
         if value < 0:
-            print(f"[SYNC][CATCH-UP] Limite {value} inválido; use 0 para ilimitado ou um inteiro positivo.")
-            return None
+            raise ValueError(
+                "ARMORED_SYNC_CATCHUP_LIMIT não pode ser negativo; use 0 para ilimitado"
+            )
         if value == 0:
-            print("[SYNC][CATCH-UP] Limite 0 = CATCH-UP ilimitado.")
             return None
         return value
 
@@ -250,6 +252,24 @@ class TelegramSource:
 
     def is_historical_complete(self) -> bool:
         return self.mode == "LIVE"
+
+    @staticmethod
+    def _is_video_message(message: Any) -> bool:
+        """Accept Telegram videos sent as media or as generic video documents."""
+        if message is None:
+            return False
+        if getattr(message, "video", None):
+            return True
+        document = getattr(message, "document", None)
+        if document is None:
+            return False
+        mime_type = str(getattr(document, "mime_type", "") or "").lower()
+        if mime_type.startswith("video/"):
+            return True
+        return any(
+            "video" in type(attribute).__name__.lower()
+            for attribute in (getattr(document, "attributes", None) or ())
+        )
 
     @staticmethod
     def _shopee_url(message: Any) -> str | None:
@@ -340,32 +360,112 @@ class TelegramSource:
         return not recoverable
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
+        """Discover every forum topic, or fall back to the whole chat history.
+
+        Telegram sources are not required to be forum supergroups. A regular
+        channel/group is represented by the synthetic topic 0 ("Geral") and
+        streamed through iter_messages. Forum pagination is continued until
+        Telegram returns no new topics.
+        """
         from telethon import functions
-        result = await self.reader.client(
-            functions.messages.GetForumTopicsRequest(
-                peer=source,
-                q=None,
-                offset_date=None,
-                offset_id=0,
-                offset_topic=0,
-                limit=100,
-            )
-        )
+
+        # Detect the chat type before choosing the discovery path. A network,
+        # permission, or Telegram API failure must never silently turn a forum
+        # scan into a general-chat scan: doing so would lose source topic IDs
+        # and can route content to the wrong Hub topic.
+        try:
+            entity = await self.reader.client.get_entity(source)
+        except Exception as exc:
+            raise RuntimeError(
+                f"telegram-source-resolution-failed:{self.source_id}:{type(exc).__name__}"
+            ) from exc
+
+        if not bool(getattr(entity, "forum", False)):
+            return [(0, "Geral")]
+
         topics: list[tuple[int, str]] = []
-        for topic in getattr(result, "topics", []) or []:
-            topic_id = getattr(topic, "id", None)
-            if topic_id is not None:
-                topics.append((int(topic_id), str(getattr(topic, "title", None) or topic_id).strip()))
+        seen: set[int] = set()
+        offset_topic = 0
+        offset_id = 0
+        offset_date = None
+        try:
+            result = await self.reader.client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=entity,
+                    q=None,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100,
+                )
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"forum-topic-discovery-failed:{self.source_id}:"
+                f"{type(exc).__name__}; refusing incomplete historical discovery"
+            ) from exc
+
+        while True:
+            page = list(getattr(result, "topics", []) or [])
+            new_topics = []
+            for topic in page:
+                topic_id = getattr(topic, "id", None)
+                if topic_id is None:
+                    continue
+                topic_id = int(topic_id)
+                if topic_id in seen:
+                    continue
+                seen.add(topic_id)
+                title = str(getattr(topic, "title", None) or topic_id).strip()
+                topics.append((topic_id, title))
+                new_topics.append(topic)
+            if not page:
+                break
+            if not new_topics:
+                raise RuntimeError(
+                    "forum-topic-pagination-stalled; refusing incomplete historical discovery"
+                )
+            if len(page) < 100:
+                break
+
+            last = page[-1]
+            next_topic = int(getattr(last, "id", 0) or 0)
+            next_id = int(getattr(last, "top_message", 0) or 0)
+            next_date = getattr(last, "date", None)
+            if not next_topic or next_topic == offset_topic:
+                raise RuntimeError(
+                    "forum-topic-pagination-offset-stalled; refusing incomplete historical discovery"
+                )
+            offset_topic, offset_id, offset_date = next_topic, next_id, next_date
+            result = await self.reader.client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=entity,
+                    q=None,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100,
+                )
+            )
+
+        if not topics:
+            raise RuntimeError(
+                f"forum-topic-list-empty:{self.source_id}; "
+                "refusing to treat a forum as a general chat"
+            )
         return topics
 
     async def _topic_messages(self, source: str, topic_id: int):
-        """Yield historical messages page-by-page.
+        """Stream history for one forum topic or for an ordinary Telegram chat."""
+        if int(topic_id) == 0:
+            async for message in self.reader.client.iter_messages(
+                source,
+                limit=None,
+                reverse=True,
+            ):
+                yield message
+            return
 
-        The backup processed Telegram pages incrementally. Do the same here:
-        never build the complete topic history in memory before candidate
-        detection. The caller keeps the Telegram connection open for the whole
-        catch-up batch, so candidates can still be materialized safely.
-        """
         from telethon import functions
         offset_id = 0
         while True:
@@ -390,10 +490,14 @@ class TelegramSource:
             ids = [int(getattr(m, "id", 0) or 0) for m in messages]
             ids = [value for value in ids if value > 0]
             if not ids:
-                return
+                raise RuntimeError(
+                    f"topic-history-page-without-message-ids:{topic_id}"
+                )
             oldest = min(ids)
-            if oldest == offset_id:
-                return
+            if offset_id and oldest >= offset_id:
+                raise RuntimeError(
+                    f"topic-history-pagination-stalled:{topic_id}:offset={offset_id}:oldest={oldest}"
+                )
             offset_id = oldest
 
     async def _download_to(self, message: Any, target: Path) -> None:
@@ -446,18 +550,19 @@ class TelegramSource:
                 now = asyncio.get_running_loop().time()
                 if now - last_report >= 5:
                     last_report = now
-                    if telegram_size:
-                        pct = downloaded * 100.0 / int(telegram_size)
-                        print(
-                            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
-                            f"{downloaded / 1048576:.1f}/{int(telegram_size) / 1048576:.1f} MiB "
-                            f"({pct:.0f}%)"
-                        )
-                    else:
-                        print(
-                            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
-                            f"{downloaded / 1048576:.1f} MiB"
-                        )
+                    if os.getenv("ARMORED_SYNC_VERBOSE_PROGRESS", "0") == "1":
+                        if telegram_size:
+                            pct = downloaded * 100.0 / int(telegram_size)
+                            print(
+                                f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
+                                f"{downloaded / 1048576:.1f}/{int(telegram_size) / 1048576:.1f} MiB "
+                                f"({pct:.0f}%)"
+                            )
+                        else:
+                            print(
+                                f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
+                                f"{downloaded / 1048576:.1f} MiB"
+                            )
 
         actual_size = target.stat().st_size if target.exists() else 0
         elapsed = max(asyncio.get_running_loop().time() - started, 0.001)
@@ -465,9 +570,11 @@ class TelegramSource:
             raise RuntimeError("download retornou arquivo vazio")
         if telegram_size is not None and actual_size != int(telegram_size):
             raise RuntimeError(f"download incompleto: {actual_size} bytes de {int(telegram_size)}")
-        print(
-            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} concluído "
-            f"{actual_size / 1048576:.1f} MiB em {elapsed:.1f}s"
+        logging.getLogger(__name__).info(
+            "[SYNC][DOWNLOAD] %s OK | %.1f MiB | %.1fs",
+            getattr(message, "id", "?"),
+            actual_size / 1048576,
+            elapsed,
         )
 
     async def materialize_candidate_async(self, telegram_message_id: str, target: Path) -> None:
@@ -483,7 +590,7 @@ class TelegramSource:
         )
         if isinstance(message, (list, tuple)):
             message = next((value for value in message if value is not None), None)
-        if message is None or not getattr(message, "video", None):
+        if message is None or not self._is_video_message(message):
             raise RuntimeError(
                 f"historical-video-not-found:{self.source_id}:{telegram_message_id}"
             )
@@ -541,17 +648,15 @@ class TelegramSource:
         messages: list[Any],
         topic_id: int,
         topic_name: str,
-    ) -> list[tuple[int, int, str, Any, str]]:
-        """Resolve one Telegram media group into one-or-more safe candidates.
+    ) -> list[tuple[int, int, str, Any, str | None]]:
+        """Resolve video media in an album without silently dropping unlinked videos.
 
-        A grouped album can contain photos, videos, and the Shopee link on a
-        different media item. When there is exactly one unique Shopee link in
-        the group, the group represents one content and one video is selected
-        deterministically. If multiple distinct links exist in the same group,
-        only videos that carry their own link are preserved automatically; links
-        living only on photos remain ambiguous and are not guessed.
+        A single unique Shopee link on an album is attached to one deterministic
+        video. With multiple links, only links attached to each video are trusted;
+        unlinked videos are still reserved with no URL so Vision can preserve
+        them as WAITING_VISION instead of silently skipping Telegram content.
         """
-        videos = [message for message in messages if getattr(message, "video", None)]
+        videos = [message for message in messages if self._is_video_message(message)]
         if not videos:
             return []
 
@@ -565,7 +670,6 @@ class TelegramSource:
             original_url = next(iter(unique_links.values()))
             if self._shopee_url_exists(original_url):
                 return []
-
             linked_videos = [
                 message for message in videos if self._shopee_url(message) is not None
             ]
@@ -576,46 +680,36 @@ class TelegramSource:
             selected_id = int(getattr(selected, "id", 0) or 0)
             if selected_id <= 0 or selected_id in self._seen:
                 return []
-            return [(
-                selected_id,
-                int(topic_id),
-                topic_name,
-                selected,
-                original_url,
-            )]
+            return [(selected_id, int(topic_id), topic_name, selected, original_url)]
 
-        if len(unique_links) > 1:
-            candidates = []
-            emitted_links: set[str] = set()
-            for message in sorted(
-                videos,
-                key=lambda value: int(getattr(value, "id", 0) or 0),
-            ):
-                url = self._shopee_url(message)
-                if not url:
-                    continue
+        candidates: list[tuple[int, int, str, Any, str | None]] = []
+        emitted_links: set[str] = set()
+        for message in sorted(
+            videos,
+            key=lambda value: int(getattr(value, "id", 0) or 0),
+        ):
+            message_id = int(getattr(message, "id", 0) or 0)
+            if message_id <= 0 or message_id in self._seen:
+                continue
+            url = self._shopee_url(message)
+            if url:
                 key = url.casefold()
                 if key in emitted_links or self._shopee_url_exists(url):
                     continue
-                message_id = int(getattr(message, "id", 0) or 0)
-                if message_id <= 0 or message_id in self._seen:
-                    continue
                 emitted_links.add(key)
-                candidates.append((
-                    message_id,
-                    int(topic_id),
-                    topic_name,
-                    message,
-                    url,
-                ))
-            return candidates
-
-        return []
+                candidates.append((message_id, int(topic_id), topic_name, message, url))
+            elif not unique_links:
+                candidates.append((message_id, int(topic_id), topic_name, message, None))
+            else:
+                # A link attached only to a different media item is ambiguous.
+                candidates.append((message_id, int(topic_id), topic_name, message, None))
+        return candidates
 
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
         """Stream historical candidates without building a topic-sized list."""
         for topic_id, topic_name in topics:
             pending_video = None
+            pending_link: str | None = None
             pending_group_id = None
             pending_group: list[Any] = []
             topic_max_id = 0
@@ -641,24 +735,23 @@ class TelegramSource:
 
                 grouped_id = getattr(message, "grouped_id", None)
                 if grouped_id is not None:
+                    # Close any standalone video before entering an album; its
+                    # adjacent link must not be borrowed from inside that album.
+                    if pending_video is not None:
+                        pending_id, pending_message = pending_video
+                        if pending_id not in self._seen:
+                            yield (
+                                pending_id,
+                                int(topic_id),
+                                topic_name,
+                                pending_message,
+                                None,
+                            )
+                        pending_video = None
+                    # Album links are resolved within the album itself.
+                    pending_link = None
                     grouped_id = int(grouped_id)
                     if pending_group_id is None:
-                        if pending_video is not None:
-                            pending_id, pending_message = pending_video
-                            original_url = self._shopee_url(pending_message)
-                            if (
-                                pending_id not in self._seen
-                                and original_url is not None
-                                and not self._shopee_url_exists(original_url)
-                            ):
-                                yield (
-                                    pending_id,
-                                    int(topic_id),
-                                    topic_name,
-                                    pending_message,
-                                    original_url,
-                                )
-                            pending_video = None
                         pending_group_id = grouped_id
                         pending_group = [message]
                     elif grouped_id == pending_group_id:
@@ -674,29 +767,67 @@ class TelegramSource:
                     async for candidate in flush_group():
                         yield candidate
 
+                paired_pending_video = False
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
-                    if not getattr(message, "video", None):
-                        original_url = self._shopee_url(message)
-                        if (
-                            pending_id not in self._seen
-                            and original_url is not None
-                            and not self._shopee_url_exists(original_url)
-                        ):
+                    paired_pending_video = True
+                    original_url = (
+                        None
+                        if self._is_video_message(message)
+                        else self._shopee_url(message)
+                    )
+                    if pending_id not in self._seen:
+                        if original_url:
+                            if not self._shopee_url_exists(original_url):
+                                yield (
+                                    pending_id,
+                                    int(topic_id),
+                                    topic_name,
+                                    pending_message,
+                                    original_url,
+                                )
+                        else:
+                            # Keep every video in SQLite even without a nearby
+                            # product URL; Vision will place it in WAITING_VISION.
                             yield (
                                 pending_id,
                                 int(topic_id),
                                 topic_name,
                                 pending_message,
-                                original_url,
+                                None,
                             )
                     pending_video = None
 
-                if not getattr(message, "video", None):
+                if not self._is_video_message(message):
+                    # In newest-first forum pages, a newer link may precede its
+                    # video; in general history the pending_video branch pairs
+                    # a link posted after the video.
+                    pending_link = (
+                        None
+                        if paired_pending_video
+                        else self._shopee_url(message)
+                    )
                     continue
 
                 original_url = self._shopee_url(message)
                 if original_url is not None:
+                    pending_link = None
+                    if (
+                        message_id not in self._seen
+                        and not self._shopee_url_exists(original_url)
+                    ):
+                        yield (
+                            message_id,
+                            int(topic_id),
+                            topic_name,
+                            message,
+                            original_url,
+                        )
+                    continue
+
+                if pending_link is not None:
+                    original_url = pending_link
+                    pending_link = None
                     if (
                         message_id not in self._seen
                         and not self._shopee_url_exists(original_url)
@@ -718,21 +849,16 @@ class TelegramSource:
 
             if pending_video is not None:
                 pending_id, pending_message = pending_video
-                original_url = self._shopee_url(pending_message)
-                if (
-                    pending_id not in self._seen
-                    and original_url is not None
-                    and not self._shopee_url_exists(original_url)
-                ):
+                if pending_id not in self._seen:
                     yield (
                         pending_id,
                         int(topic_id),
                         topic_name,
                         pending_message,
-                        original_url,
+                        None,
                     )
 
-            if topic_max_id:
+            if topic_max_id and int(topic_id) > 0:
                 self._historical_checkpoints[topic_id] = topic_max_id
 
     async def iter_historical_candidates_async(self):
@@ -841,11 +967,15 @@ class TelegramSource:
                     else (self.db.sync_topic_checkpoint(topic_id) if self.db is not None else 0)
                 )
                 messages = []
+                history_kwargs = {
+                    "min_id": max(0, checkpoint),
+                    "reverse": True,
+                }
+                if int(topic_id) > 0:
+                    history_kwargs["reply_to"] = int(topic_id)
                 async for message in self.reader.client.iter_messages(
                     source_ref,
-                    reply_to=topic_id,
-                    min_id=max(0, checkpoint),
-                    reverse=True,
+                    **history_kwargs,
                 ):
                     messages.append(message)
 
@@ -893,15 +1023,15 @@ class TelegramSource:
                         index = next_index
                         continue
 
-                    if getattr(message, "video", None):
+                    if self._is_video_message(message):
                         original_url = self._shopee_url(message)
                         if original_url is None and index + 1 < len(messages):
                             next_message = messages[index + 1]
-                            if not getattr(next_message, "video", None):
+                            if not self._is_video_message(next_message):
                                 original_url = self._shopee_url(next_message)
                         if (
-                            original_url is not None
-                            and not self._shopee_url_exists(original_url)
+                            original_url is None
+                            or not self._shopee_url_exists(original_url)
                         ):
                             candidates.append(SyncMessage(
                                 telegram_message_id=str(message_id),
@@ -961,12 +1091,16 @@ class TelegramSource:
                 scan_limit = 20
 
             messages = []
+            history_kwargs = {
+                "min_id": max(0, checkpoint),
+                "reverse": True,
+                "limit": scan_limit,
+            }
+            if int(topic_id) > 0:
+                history_kwargs["reply_to"] = int(topic_id)
             async for message in self.reader.client.iter_messages(
                 source_ref,
-                reply_to=topic_id,
-                min_id=max(0, checkpoint),
-                reverse=True,
-                limit=scan_limit,
+                **history_kwargs,
             ):
                 messages.append(message)
 
@@ -1031,7 +1165,7 @@ class TelegramSource:
                     index = next_index
                     continue
 
-                if not getattr(message, "video", None):
+                if not self._is_video_message(message):
                     safe_checkpoint = max(safe_checkpoint, message_id)
                     index += 1
                     continue
@@ -1039,10 +1173,10 @@ class TelegramSource:
                 original_url = self._shopee_url(message)
                 if original_url is None and index + 1 < len(messages):
                     next_message = messages[index + 1]
-                    if not getattr(next_message, "video", None):
+                    if not self._is_video_message(next_message):
                         original_url = self._shopee_url(next_message)
 
-                if original_url is None or self._shopee_url_exists(original_url):
+                if original_url is not None and self._shopee_url_exists(original_url):
                     safe_checkpoint = max(safe_checkpoint, message_id)
                     index += 1
                     continue

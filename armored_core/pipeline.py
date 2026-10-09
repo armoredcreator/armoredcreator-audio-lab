@@ -31,6 +31,25 @@ class Pipeline:
                 self.cleanup(item_id)
             self.trace.emit(item_id, "PIPELINE", "END", state=State.PUBLISHED.value, cleanup=item.cleanup_completed)
             return
+        # stop_after_vision is a hard boundary, not merely a flag checked after
+        # identifying a new product. Already-approved rows must return here
+        # before RECEIVED can transition to IA/Studio or any later tool.
+        if stop_after_vision and str(item.affiliate_url or "").strip():
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "STOP_AFTER_VISION",
+                state=item.state.value,
+                approved=True,
+            )
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "END",
+                state=item.state.value,
+                stop_after_vision=True,
+            )
+            return
         try:
             self.db.record_attempt(item_id)
             # Vision V1 validates the Shopee product from the URL alone.
@@ -39,7 +58,7 @@ class Pipeline:
             if not stop_after_vision and not item.original_path.is_file():
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
-                if item.affiliate_url:
+                if str(item.affiliate_url or "").strip():
                     next_state = (
                         State.IA
                         if self.ia is not None
@@ -61,7 +80,7 @@ class Pipeline:
                     self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
             elif item.state == State.RECOVERY:
                 result = item.result_path
-                if not result and item.affiliate_url:
+                if not result and str(item.affiliate_url or "").strip():
                     result = self.storage.result(
                         item_id,
                         item.affiliate_url,
@@ -296,11 +315,44 @@ class Pipeline:
                 self.trace.emit(item_id, "PIPELINE", "SHUTDOWN", state=current.state.value, error_type=type(exc).__name__, error=str(exc))
                 raise KeyboardInterrupt from exc
             reason = f"{type(exc).__name__}: {exc}"
-            # Processing-stage failures are recoverable by default. The item
-            # remains the single authoritative candidate and the Coordinator
-            # must reconcile/resume it from the persisted artifacts/state on
-            # the next recovery pass. Generic exceptions must never silently
-            # abandon the current candidate.
+            # Recovery is valid only when the immutable ORIGINAL exists. Before
+            # download, preserve RECEIVED/VISION so the explicit Vision/Stock
+            # stages can retry from SQLite instead of stranding the item.
+            if not current.original_path.is_file():
+                retry_state = (
+                    current.state
+                    if current.state in (State.RECEIVED, State.VISION, State.FAILED)
+                    else (
+                        State.RECEIVED
+                        if current.affiliate_url
+                        else State.VISION
+                    )
+                )
+                if current.state != retry_state:
+                    self.db.transition(
+                        item_id,
+                        retry_state,
+                        "retryable-missing-original",
+                    )
+                self.db.record_retryable_error(item_id, reason)
+                self.log.error(
+                    "[PIPELINE][ITEM %s] RETRYABLE sem ORIGINAL state=%s: %s",
+                    item_id,
+                    retry_state.value,
+                    exc,
+                )
+                self.trace.emit(
+                    item_id,
+                    "PIPELINE",
+                    "RETRYABLE_NO_ORIGINAL",
+                    state=retry_state.value,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+
+            # Processing-stage failures with an immutable ORIGINAL are
+            # recoverable from durable artifacts/state.
             self.db.transition(item_id, State.RECOVERY, reason)
             self.log.error(
                 "[PIPELINE][ITEM %s] ERRO RECOVERABLE state=%s: %s",

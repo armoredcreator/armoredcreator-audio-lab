@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ class Coordinator:
 
     def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
         self.db = db
+        self.log = logging.getLogger(__name__)
         self.storage = storage
         self.sync = SyncService(db, storage)
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
@@ -35,7 +37,14 @@ class Coordinator:
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
 
     @classmethod
-    def build(cls, root: Path | None = None, bindings: Any | None = None):
+    def build(
+        cls,
+        root: Path | None = None,
+        bindings: Any | None = None,
+        *,
+        acquire_runtime_lock: bool = False,
+        staged: bool = False,
+    ):
         storage = Storage(root)
         # Project-local credential source of truth.
         # Secrets live only in credentials/project.env; runtime modules continue
@@ -51,43 +60,101 @@ class Coordinator:
         if project_config.exists():
             load_dotenv(project_config, override=False)
 
-        db = Database(storage.database / "armoredcreator.db")
-        if bindings is None:
-            from ArmoredHub.service import ArmoredHub
-            from ArmoredStudio.service import ArmoredStudio
-            from ArmoredVision.service import ArmoredVision
-            from ArmoredIA.service import ArmoredIA
-            from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
+        # The staged historical runner is exclusively a real Telegram
+        # operation; never silently fall back to LocalSource because of an
+        # inherited shell variable or a stale project.env setting.
+        if staged:
+            os.environ["ARMORED_REAL_TELEGRAM"] = "1"
+            os.environ["ARMORED_REQUIRED_SOURCE_COUNT"] = "3"
+            os.environ["ARMORED_SYNC_VERBOSE_PROGRESS"] = "0"
 
-            vision = ArmoredVision()
-            ia = ArmoredIA()
-            studio = ArmoredStudio(storage.root)
-            routes = load_routes()
-            legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
-            for route in routes:
-                db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
-            publisher = ArmoredHub(storage.root, db, routes=routes)
-            if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
-                api_id = os.getenv("TELEGRAM_API_ID")
-                api_hash = os.getenv("TELEGRAM_API_HASH")
-                if not api_id or not api_hash:
-                    raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH são obrigatórios")
-                reader = TelegramReader(storage.root, int(api_id), api_hash)
-                source = (
-                    MultiTelegramSource(storage.root, reader, db, routes)
-                    if len(routes) > 1
-                    else TelegramSource(
-                        storage.root,
-                        reader,
-                        db,
-                        source=(routes[0].source.chat_id if routes else None),
-                        source_id=(routes[0].source.source_id if routes else None),
+        # Staged runs defer schema creation/migrations until after the
+        # SQLite runtime lease is acquired. Opening a second Coordinator must
+        # not write the database before discovering an active owner.
+        db = Database(
+            storage.database / "armoredcreator.db",
+            initialize=not acquire_runtime_lock,
+        )
+        runtime_lock_acquired = False
+        try:
+            if acquire_runtime_lock:
+                db.acquire_runtime_lock("coordinator")
+                runtime_lock_acquired = True
+                db.initialize()
+
+            def make_coordinator(vision, studio, publisher, source, ia=None):
+                coordinator = cls(db, storage, vision, studio, publisher, source, ia)
+                coordinator._runtime_lock_held = runtime_lock_acquired
+                return coordinator
+
+            if bindings is None:
+                from ArmoredVision.service import ArmoredVision
+                from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
+
+                vision = ArmoredVision()
+                routes = load_routes()
+                if staged and len(routes) != 3:
+                    raise RuntimeError(
+                        "Execução por etapas exige exatamente 3 fontes Telegram; "
+                        f"foram configuradas {len(routes)}."
                     )
-                )
-            else:
-                source = LocalSource(storage.root / "input")
-            return cls(db, storage, vision, studio, publisher, source, ia)
-        return cls(db, storage, bindings.vision, bindings.studio, bindings.publisher, bindings.source, getattr(bindings, "ia", None))
+                legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
+                for route in routes:
+                    db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
+
+                if staged:
+                    # The first three catch-up stages require only Sync, Vision and
+                    # SQLite. Do not instantiate Studio/RVC, IA or Hub/publishing.
+                    ia = None
+                    studio = None
+                    publisher = None
+                else:
+                    from ArmoredHub.service import ArmoredHub
+                    from ArmoredStudio.service import ArmoredStudio
+                    from ArmoredIA.service import ArmoredIA
+
+                    ia = ArmoredIA()
+                    studio = ArmoredStudio(storage.root)
+                    publisher = ArmoredHub(storage.root, db, routes=routes)
+
+                if os.getenv("ARMORED_REAL_TELEGRAM", "0") == "1":
+                    api_id = os.getenv("TELEGRAM_API_ID")
+                    api_hash = os.getenv("TELEGRAM_API_HASH")
+                    if not api_id or not api_hash:
+                        raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH são obrigatórios")
+                    reader = TelegramReader(storage.root, int(api_id), api_hash)
+                    source = (
+                        MultiTelegramSource(storage.root, reader, db, routes)
+                        if len(routes) > 1
+                        else TelegramSource(
+                            storage.root,
+                            reader,
+                            db,
+                            source=(routes[0].source.chat_id if routes else None),
+                            source_id=(routes[0].source.source_id if routes else None),
+                        )
+                    )
+                else:
+                    source = LocalSource(storage.root / "input")
+                return make_coordinator(vision, studio, publisher, source, ia)
+            return make_coordinator(
+                bindings.vision,
+                bindings.studio,
+                bindings.publisher,
+                bindings.source,
+                getattr(bindings, "ia", None),
+            )
+
+        except BaseException:
+            # If composition fails after acquiring the lease, do not strand
+            # the current PID as owner of SQLite and block the next safe retry.
+            if runtime_lock_acquired:
+                try:
+                    db.release_runtime_lock("coordinator")
+                except Exception:
+                    pass
+            db.close()
+            raise
 
     async def _ensure_source_connection(self) -> None:
         """Reconnect a real Telegram source before materializing the next item."""
@@ -229,17 +296,11 @@ class Coordinator:
                 return item_id, True, self.db.get(item_id)
             return item_id, True, current
         except Exception:
-            # A technical Vision failure happens before the materialization
-            # phase and may still need the immutable original for Recovery.
-            # Once Vision has durably accepted the candidate (affiliate_url),
-            # a failure here is the Sync materialization failure itself: do not
-            # retry the download inline. Leave RECEIVED without the original
-            # so the recovery wrapper can perform its single same-run source
-            # rediscovery through the durable checkpoint.
-            # Vision is now a hard pre-download gate. A technical Vision
-            # failure is durable RECOVERY, but it must never trigger a download
-            # merely to make Recovery possible. Recovery/source rediscovery will
-            # retry the candidate from Telegram without materializing media first.
+            # Before an immutable ORIGINAL exists, a technical Vision failure
+            # remains retryable in RECEIVED/VISION and blocks checkpoint progress.
+            # After Vision approval, a download failure leaves the approved
+            # RECEIVED row durable so the explicit Stock stage can retry it.
+            # Never create RECOVERY merely to make a pre-download error recoverable.
             raise
         finally:
             # Sync must be released before Studio/Hub can use the same session.
@@ -270,18 +331,21 @@ class Coordinator:
         return item_id, self.db.get(item_id)
 
     async def _run_staged_catch_up_async(self) -> list[str]:
-        """Run historical catch-up by tool stage: discover/Vision first, then download.
+        """Run catch-up in four durable stages: reserve, Vision, download, production.
 
-        Only candidate metadata and SQLite state exist during the Vision pass.
-        Once that pass is exhausted, approved items are materialized and processed
-        one at a time. The durable SQLite rows—not an in-memory media queue—are
-        the restart boundary.
+        SQLite is the restart boundary. Stage 1 only reserves metadata for every
+        configured source. Stage 2 classifies reserved candidates without media.
+        Stage 3 materializes Vision-approved originals serially. Stage 4 runs the
+        canonical production pipeline in configured source order, never mixing
+        destination routes. No media queue is persisted or created.
         """
         source = self.source
-        iterator = source.iter_historical_candidates_async()
         processed: list[str] = []
         checkpoint_blocked = False
 
+        # Stage 1: discover/reserve candidates from all configured sources.
+        # Do not run Vision or download media while any source is still scanning.
+        iterator = source.iter_historical_candidates_async()
         try:
             async for message in iterator:
                 source_id = str(getattr(message, "source_id", "telegram") or "telegram")
@@ -289,97 +353,103 @@ class Coordinator:
                     str(message.telegram_message_id), source_id
                 ))
                 try:
-                    item_id, current = await self._vision_only_async(message)
+                    ingest = IngestMessage(
+                        telegram_message_id=str(message.telegram_message_id),
+                        source_id=source_id,
+                        topic_id=getattr(message, "topic_id", None),
+                        topic_name=getattr(message, "topic_name", None),
+                        original_url=getattr(message, "original_url", None),
+                        source_path=getattr(message, "source_path", None),
+                        materialize=getattr(message, "materialize", None),
+                    )
+                    item_id = str(self.sync.reserve_message(ingest))
                     marker = getattr(source, "mark_ingested", None)
                     if marker is not None:
                         marker(str(message.telegram_message_id))
+                    processed.append(item_id)
                 except Exception as exc:
                     checkpoint_blocked = True
                     marker = getattr(source, "mark_materialization_failed", None)
                     if marker is not None:
                         marker()
-                    import logging
-                    logging.getLogger(__name__).exception(
-                        "[COORDINATOR][CATCH-UP][VISION] %s failed; "
-                        "no media downloaded and historical checkpoint remains blocked: %s",
+                    self.log.exception(
+                        "[COORDINATOR][CATCH-UP][RESERVE] %s failed; "
+                        "historical checkpoint remains blocked: %s",
                         item_id, exc,
                     )
-                    try:
-                        current = self.db.get(item_id)
-                    except Exception:
-                        current = None
-
-                if current is not None:
-                    processed.append(item_id)
-                    if current.state == State.RECOVERY:
-                        checkpoint_blocked = True
         finally:
-            # The historical scan has finished before Hub opens the shared
-            # Telethon session for publication.
             await self._release_source_connection()
 
-        # SQLite is authoritative for this phase. This also resumes items
-        # approved in a previous process that stopped before downloading.
-        for item in self.db.pending_vision_approved_items():
-            if item.state != State.RECEIVED or not item.affiliate_url:
-                continue
-            if not item.original_path.is_file():
-                materializer = getattr(source, "materialize_candidate_async", None)
-                if materializer is None:
-                    raise RuntimeError("Sync source cannot re-fetch a Vision-approved historical candidate")
-
-                async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
-                    if hasattr(source, "sources"):
-                        await source.materialize_candidate_async(source_id, message_id, target)
-                    else:
-                        if str(source.source_id) != str(source_id):
-                            raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
-                        await source.materialize_candidate_async(message_id, target)
-
-                ingest = IngestMessage(
-                    telegram_message_id=item.telegram_message_id,
-                    source_id=item.source_id,
-                    topic_id=item.topic_id,
-                    topic_name=item.topic_name,
-                    original_url=item.original_url,
-                    materialize=materialize,
-                )
-                try:
-                    await self._ensure_source_connection()
-                    try:
-                        await self.sync.materialize_message_async(ingest)
-                    finally:
-                        await self._release_source_connection()
-                except Exception as exc:
-                    checkpoint_blocked = True
-                    marker = getattr(source, "mark_materialization_failed", None)
-                    if marker is not None:
-                        marker()
-                    import logging
-                    logging.getLogger(__name__).exception(
-                        "[COORDINATOR][CATCH-UP][DOWNLOAD] %s failed; "
-                        "checkpoint remains blocked: %s",
-                        item.content_id, exc,
-                    )
-                    continue
-
+        # Stage 2: classify all durable candidates that still need Vision.
+        # This includes VISION rows left by an interrupted run. WAITING_VISION
+        # rows remain durable and are retried only by the explicit retry policy.
+        for item in self.db.pending_vision_candidates():
             try:
-                self.run(item.content_id)
+                self.pipeline.run(item.content_id, stop_after_vision=True)
                 current = self.db.get(item.content_id)
                 if current.state == State.RECOVERY:
                     checkpoint_blocked = True
-                if item.content_id not in processed:
-                    processed.append(item.content_id)
             except Exception as exc:
                 checkpoint_blocked = True
-                import logging
-                logging.getLogger(__name__).exception(
-                    "[COORDINATOR][CATCH-UP][PIPELINE] %s failed; checkpoint blocked: %s",
+                self.log.exception(
+                    "[COORDINATOR][CATCH-UP][VISION] %s failed; no media downloaded: %s",
                     item.content_id, exc,
                 )
-                if item.content_id not in processed:
-                    processed.append(item.content_id)
+            if item.content_id not in processed:
+                processed.append(item.content_id)
 
+        # Stage 3: download approved originals serially. No Studio/Hub work is
+        # allowed until the download stage has been attempted for all approvals.
+        for item in self.db.pending_vision_approved_items():
+            if item.state != State.RECEIVED or not item.affiliate_url:
+                continue
+            if item.original_path.is_file():
+                continue
+            materializer = getattr(source, "materialize_candidate_async", None)
+            if materializer is None:
+                checkpoint_blocked = True
+                self.log.error(
+                    "[COORDINATOR][CATCH-UP][DOWNLOAD] source cannot materialize %s",
+                    item.content_id,
+                )
+                continue
+
+            async def materialize(target, source_id=item.source_id, message_id=item.telegram_message_id):
+                if hasattr(source, "sources"):
+                    await source.materialize_candidate_async(source_id, message_id, target)
+                else:
+                    if str(source.source_id) != str(source_id):
+                        raise RuntimeError(f"source-mismatch-for-materialization:{source_id}")
+                    await source.materialize_candidate_async(message_id, target)
+
+            ingest = IngestMessage(
+                telegram_message_id=item.telegram_message_id,
+                source_id=item.source_id,
+                topic_id=item.topic_id,
+                topic_name=item.topic_name,
+                original_url=item.original_url,
+                materialize=materialize,
+            )
+            try:
+                await self._ensure_source_connection()
+                try:
+                    await self.sync.materialize_message_async(ingest)
+                finally:
+                    await self._release_source_connection()
+            except Exception as exc:
+                checkpoint_blocked = True
+                marker = getattr(source, "mark_materialization_failed", None)
+                if marker is not None:
+                    marker()
+                self.log.exception(
+                    "[COORDINATOR][CATCH-UP][DOWNLOAD] %s failed; "
+                    "production stage will not start this run: %s",
+                    item.content_id, exc,
+                )
+
+        # A failed scan, Vision call, or download must not let the source move
+        # to LIVE or allow later production phases to overtake an incomplete
+        # download stage. SQLite rows remain available for the next recovery.
         failed = checkpoint_blocked or bool(
             getattr(source, "historical_materialization_failed", False)
         )
@@ -391,9 +461,57 @@ class Coordinator:
             else:
                 self.db.complete_historical_sync()
 
+        if failed:
+            self._last_catch_up_completed_count = 0
+            return processed
+
+        # Stage 4: complete production source-by-source in configured route order.
+        # Only items with an ORIGINAL can enter production; the pipeline resumes
+        # from the durable state and keeps publication idempotency in SQLite.
+        production_items = self.db.catch_up_production_items()
+        configured_sources = [
+            str(candidate.source_id)
+            for candidate in getattr(source, "sources", ())
+            if getattr(candidate, "source_id", None) is not None
+        ]
+        if not configured_sources:
+            configured_sources = sorted({item.source_id for item in production_items})
+        source_rank = {source_id: index for index, source_id in enumerate(configured_sources)}
+        production_items.sort(key=lambda item: (
+            source_rank.get(str(item.source_id), len(source_rank)),
+            int(item.telegram_message_id) if str(item.telegram_message_id).isdigit() else 0,
+            item.content_id,
+        ))
+
+        for item in production_items:
+            current = self.db.get(item.content_id)
+            if current.state == State.WAITING_VISION:
+                continue
+            if current.state == State.RECEIVED and not current.affiliate_url:
+                continue
+            if not current.original_path.is_file():
+                continue
+            try:
+                self.run(item.content_id)
+                current = self.db.get(item.content_id)
+                if current.state == State.RECOVERY:
+                    checkpoint_blocked = True
+                    # Do not let a later source overtake a source with an
+                    # unresolved publication or technical recovery.
+                    break
+            except Exception as exc:
+                checkpoint_blocked = True
+                self.log.exception(
+                    "[COORDINATOR][CATCH-UP][PRODUCTION] %s failed; "
+                    "later source production is held: %s",
+                    item.content_id, exc,
+                )
+                break
+            if item.content_id not in processed:
+                processed.append(item.content_id)
+
         self._last_catch_up_completed_count = sum(
-            1
-            for item_id in set(processed)
+            1 for item_id in set(processed)
             if self.db.get(item_id).state == State.PUBLISHED
             and self.db.get(item_id).cleanup_completed
         )
@@ -744,12 +862,12 @@ class Coordinator:
         return isinstance(exc, (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError))
 
     async def _run_catch_up_with_recovery_async(self) -> None:
-        """Run historical processing, then retry technical RECOVERY items.
+        """Run historical processing and reconcile only recoverable items with ORIGINAL.
 
-        A technical failure must not starve the rest of CATCH-UP. Its checkpoint
-        remains blocked, so after the historical scan we reconcile RECOVERY
-        items and, when progress is made, rescan from the durable checkpoint.
-        WAITING_VISION is intentionally not auto-retried here.
+        A technical pre-download Vision failure remains in VISION with its error
+        recorded; it is not sent to Recovery and the historical checkpoint stays
+        blocked. RECOVERY reconciliation is reserved for failures with durable
+        media/artifacts. WAITING_VISION is intentionally not auto-retried here.
 
         Real Telegram connection failures can also happen while the historical
         iterator is being advanced after a materialization failure. In that
@@ -1034,10 +1152,12 @@ class Coordinator:
         self.recovery.reconcile(item_id)
 
     def close(self) -> None:
-        if self._runtime_lock_held:
-            self.db.release_runtime_lock("coordinator")
+        try:
+            if self._runtime_lock_held:
+                self.db.release_runtime_lock("coordinator")
+        finally:
             self._runtime_lock_held = False
-        self.db.close()
+            self.db.close()
 
     def process_next(self):
         item_id = self.ingest_once()

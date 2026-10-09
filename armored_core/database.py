@@ -5,11 +5,16 @@ from pathlib import Path
 from .models import Item, State
 
 class Database:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, initialize: bool = True) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        if initialize:
+            self._init()
+
+    def initialize(self) -> None:
+        """Initialize/migrate the schema after a staged runtime lease is held."""
         self._init()
 
     def _init(self) -> None:
@@ -357,6 +362,18 @@ class Database:
         self.conn.commit()
         return item_id
 
+    def update_original_url(self, item_id: str, original_url: str) -> None:
+        """Enrich a durable reservation when a nearby product link is discovered later."""
+        value = str(original_url or "").strip()
+        if not value:
+            return
+        self.conn.execute(
+            "UPDATE items SET original_url=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE content_id=? AND (original_url IS NULL OR TRIM(original_url)='')",
+            (value, str(item_id)),
+        )
+        self.conn.commit()
+
     def repair_original_path(self, item_id: str, path: Path) -> None:
         """Repair a legacy/incomplete row without changing its pipeline state."""
         self.conn.execute(
@@ -440,6 +457,64 @@ class Database:
             "ORDER BY source_id, COALESCE(topic_id, 0), "
             "CAST(telegram_message_id AS INTEGER), created_at, content_id",
             (State.RECEIVED.value,),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
+    def pre_download_recovery_items(self) -> list[Item]:
+        """Return RECOVERY rows that violate the immutable-ORIGINAL invariant."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE state=? "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.RECOVERY.value,),
+        ).fetchall()
+        items = [self.get(str(row["content_id"])) for row in rows]
+        return [item for item in items if not item.original_path.is_file()]
+
+    def vision_approved_interrupted_items(self) -> list[Item]:
+        """Find Vision rows where evidence was committed before a crash.
+
+        Pipeline persists affiliate_url before transitioning VISION back to
+        RECEIVED in pre-download mode. A process crash between those commits
+        must not strand the approved candidate outside both Vision and Stock.
+        """
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE state=? "
+            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.VISION.value,),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
+    def pending_vision_candidates(self) -> list[Item]:
+        """Return reserved rows whose Vision gate has not produced a decision."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items "
+            "WHERE state IN (?, ?) AND (affiliate_url IS NULL OR TRIM(affiliate_url)='') "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.RECEIVED.value, State.VISION.value),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
+    def catch_up_production_items(self) -> list[Item]:
+        """Return durable items that can resume production without re-running Vision."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE "
+            "(state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'') "
+            "OR state IN (?, ?, ?, ?) "
+            "OR (state=? AND cleanup_completed=0) "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (
+                State.RECEIVED.value,
+                State.IA.value,
+                State.STUDIO.value,
+                State.PUBLISHING.value,
+                State.RECOVERY.value,
+                State.PUBLISHED.value,
+            ),
         ).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
 
@@ -589,6 +664,19 @@ class Database:
         )
         self.conn.commit()
 
+    def record_retryable_error(self, item_id: str, error: str) -> None:
+        """Persist a technical error without moving a pre-download item to RECOVERY."""
+        current = self.get(item_id)
+        self.conn.execute(
+            "UPDATE items SET last_error=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (str(error), str(item_id)),
+        )
+        self.conn.execute(
+            "INSERT INTO state_events (content_id,old_state,new_state,reason) VALUES (?,?,?,?)",
+            (str(item_id), current.state.value, current.state.value, str(error)),
+        )
+        self.conn.commit()
+
     def fail(self, item_id: str, error: str) -> None:
         self.conn.execute(
             "UPDATE items SET state=?, last_error=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
@@ -659,52 +747,67 @@ class Database:
         ).fetchone()
 
     def acquire_runtime_lock(self, name: str = "coordinator") -> None:
-        """Acquire the single-process runtime lease stored in SQLite.
+        """Atomically acquire the single-process lease stored in SQLite.
 
-        The lease intentionally lives in the database, not in a legacy lock
-        directory/file. A crashed process leaves the row behind; on restart,
-        a dead PID is deterministically replaced. A live PID blocks a second
-        Coordinator from starting.
+        BEGIN IMMEDIATE serializes the check-and-claim operation across
+        processes. A crashed process leaves its row behind; a dead PID can be
+        replaced, while a live PID blocks a second Coordinator.
         """
+        import errno
         import os
+        from datetime import datetime, timezone
 
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS runtime_locks (
-                name TEXT PRIMARY KEY,
-                pid INTEGER NOT NULL,
-                started_at TEXT NOT NULL,
-                heartbeat_at TEXT NOT NULL
-            )"""
-        )
-        row = self.conn.execute(
-            "SELECT pid FROM runtime_locks WHERE name=?", (str(name),)
-        ).fetchone()
-        current_pid = os.getpid()
-        if row is not None:
-            pid = int(row["pid"])
-            # A live PID is always an active owner, including when a second
-            # Coordinator object is created inside the same process. This keeps
-            # the one-Coordinator invariant independent of process boundaries.
-            alive = pid == current_pid
-            if not alive:
-                try:
-                    os.kill(pid, 0)
-                    alive = True
-                except OSError:
-                    alive = False
-            if alive:
-                raise RuntimeError(
-                    f"runtime-lock-active: {name} is already owned by PID {pid}"
-                )
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS runtime_locks (
+                    name TEXT PRIMARY KEY,
+                    pid INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL
+                )"""
+            )
+            row = self.conn.execute(
+                "SELECT pid FROM runtime_locks WHERE name=?", (str(name),)
+            ).fetchone()
+            current_pid = os.getpid()
+            if row is not None:
+                pid = int(row["pid"])
+                # Same-process ownership is still exclusive: a second
+                # Coordinator object must not share this runtime lease.
+                alive = pid == current_pid
+                if not alive:
+                    try:
+                        os.kill(pid, 0)
+                        alive = True
+                    except PermissionError:
+                        alive = True
+                    except ProcessLookupError:
+                        alive = False
+                    except OSError as exc:
+                        # Windows reports an absent process as WinError 87;
+                        # ESRCH is the corresponding POSIX result. Other OS
+                        # errors are treated conservatively as a live process.
+                        alive = not (
+                            getattr(exc, "errno", None) == errno.ESRCH
+                            or getattr(exc, "winerror", None) == 87
+                        )
+                if alive:
+                    raise RuntimeError(
+                        f"runtime-lock-active: {name} is already owned by PID {pid}"
+                    )
 
-        self.conn.execute(
-            "INSERT INTO runtime_locks(name,pid,started_at,heartbeat_at) VALUES(?,?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET pid=excluded.pid, "
-            "started_at=excluded.started_at, heartbeat_at=excluded.heartbeat_at",
-            (str(name), current_pid, now, now),
-        )
-        self.conn.commit()
+            self.conn.execute(
+                "INSERT INTO runtime_locks(name,pid,started_at,heartbeat_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET pid=excluded.pid, "
+                "started_at=excluded.started_at, heartbeat_at=excluded.heartbeat_at",
+                (str(name), current_pid, now, now),
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def heartbeat_runtime_lock(self, name: str = "coordinator") -> None:
         import os
