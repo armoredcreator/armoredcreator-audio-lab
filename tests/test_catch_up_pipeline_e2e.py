@@ -139,8 +139,10 @@ def test_sync_vision_stock_are_durable_separate_stages_end_to_end(tmp_path, monk
     try:
         vision_report = asyncio.run(run_catch_up_stage(vision_coordinator, "vision"))
         assert vision_report["processed"] == 4
-        assert vision_report["outcomes"]["approved"] == 3
-        assert vision_report["outcomes"]["waiting_vision"] == 1
+        assert vision_report["outcomes"]["approved_this_stage"] == 3
+        assert vision_report["outcomes"]["waiting_vision_this_stage"] == 1
+        assert vision_report["outcomes"]["approved_total"] == 3
+        assert vision_report["outcomes"]["waiting_vision_total"] == 1
         assert vision_report["errors"] == []
         assert vision_source.downloads == []
         expected_vision = (
