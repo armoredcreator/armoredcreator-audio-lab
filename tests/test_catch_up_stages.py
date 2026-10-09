@@ -279,6 +279,22 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(len(report["errors"]), 1)
         self.assertFalse(items[2].affiliate_url)
 
+    def test_stock_refuses_to_download_while_vision_candidates_remain(self):
+        item = make_item(
+            SOURCE_IDS[0],
+            349,
+            Path(tempfile.gettempdir()) / "stock-before-vision.mp4",
+        )
+        source = FakeSource()
+        db = FakeDB([item])
+        coordinator = FakeCoordinator(source, db)
+
+        with self.assertRaisesRegex(RuntimeError, "ArmoredStock bloqueado"):
+            asyncio.run(run_catch_up_stage(coordinator, "stock"))
+
+        self.assertEqual(source.downloads, [])
+        self.assertFalse(item.original_path.is_file())
+
     def test_stock_stops_on_first_download_failure_to_preserve_order(self):
         with tempfile.TemporaryDirectory() as td:
             items = [
