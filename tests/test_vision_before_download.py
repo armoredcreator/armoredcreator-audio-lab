@@ -187,6 +187,39 @@ class VisionBeforeDownloadTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
+    def test_blank_affiliate_url_is_revalidated_before_any_production_stage(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            studio = _Studio(storage)
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionResolved(),
+                studio,
+                _Publisher(),
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "blank-affiliate",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/123",
+                    original_path=storage.original("blank-affiliate"),
+                )
+                db.set_vision(item_id, "produto antigo", "   ")
+
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.RECEIVED)
+                self.assertEqual(item.affiliate_url, "https://affiliate.invalid/product")
+                self.assertFalse(item.original_path.exists())
+                self.assertEqual(studio.calls, 0)
+            finally:
+                coordinator.close()
+
     def test_technical_vision_failure_never_downloads(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
