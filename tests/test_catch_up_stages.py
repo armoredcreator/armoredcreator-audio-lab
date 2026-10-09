@@ -8,12 +8,12 @@ from armored_core.catch_up_stages import run_catch_up_stage
 from armored_core.models import State
 
 
+SOURCE_IDS = ("source-1", "source-2", "source-3")
+
+
 class FakeSource:
     def __init__(self, messages=()):
-        self.sources = tuple(
-            SimpleNamespace(source_id=source_id)
-            for source_id in ("source-1", "source-2", "source-3")
-        )
+        self.sources = tuple(SimpleNamespace(source_id=value) for value in SOURCE_IDS)
         self.messages = list(messages)
         self.historical_scan_exhausted = True
         self.historical_limit_reached = False
@@ -114,18 +114,32 @@ class FakeCoordinator:
         self.production_calls += 1
 
 
+def make_item(source_id, message_id, path):
+    return SimpleNamespace(
+        content_id=f"{source_id}:{message_id}",
+        telegram_message_id=str(message_id),
+        source_id=source_id,
+        topic_id=SOURCE_IDS.index(source_id) + 1,
+        topic_name=f"topic-{source_id}",
+        original_url=f"https://example.invalid/{message_id}",
+        affiliate_url=None,
+        state=State.RECEIVED,
+        original_path=Path(path),
+    )
+
+
 class CatchUpStageTests(unittest.TestCase):
     def test_sync_only_reserves_all_sources_and_never_downloads_or_runs_pipeline(self):
         messages = [
             SimpleNamespace(
-                source_id=f"source-{index}",
+                source_id=source_id,
                 telegram_message_id=str(100 + index),
                 topic_id=index,
-                topic_name=f"topic-{index}",
+                topic_name=f"topic-{source_id}",
                 original_url=f"https://example.invalid/{index}",
                 materialize=lambda _target: self.fail("sync stage must not download"),
             )
-            for index in (1, 2, 3)
+            for index, source_id in enumerate(SOURCE_IDS, start=1)
         ]
         source = FakeSource(messages)
         db = FakeDB()
@@ -134,60 +148,53 @@ class CatchUpStageTests(unittest.TestCase):
         report = asyncio.run(run_catch_up_stage(coordinator, "sync"))
 
         self.assertEqual(report["processed"], 3)
-        self.assertEqual([x.split(":")[0] for x in coordinator.sync.reserved],
-                         ["source-1", "source-2", "source-3"])
+        self.assertEqual([x.split(":")[0] for x in coordinator.sync.reserved], list(SOURCE_IDS))
         self.assertEqual(source.downloads, [])
         self.assertEqual(coordinator.pipeline.calls, [])
         self.assertEqual(coordinator.production_calls, 0)
         self.assertFalse(report["historical_complete"])
 
-    def test_vision_only_calls_vision_gate_and_does_not_download_or_produce(self):
-        item = SimpleNamespace(
-            content_id="source-1:101",
-            telegram_message_id="101",
-            source_id="source-1",
-            topic_id=1,
-            topic_name="topic",
-            original_url="https://example.invalid/item",
-            affiliate_url=None,
-            state=State.RECEIVED,
-            original_path=Path(tempfile.gettempdir()) / "does-not-exist-catch-up.mp4",
-        )
+    def test_vision_runs_in_configured_source_order_without_download_or_production(self):
+        items = [
+            make_item(source_id, 200 + index, Path(tempfile.gettempdir()) / f"vision-{source_id}.mp4")
+            for index, source_id in enumerate(SOURCE_IDS, start=1)
+        ]
         source = FakeSource()
-        db = FakeDB([item])
+        db = FakeDB(items)
         coordinator = FakeCoordinator(source, db)
 
         report = asyncio.run(run_catch_up_stage(coordinator, "vision"))
 
-        self.assertEqual(coordinator.pipeline.calls, [("source-1:101", True)])
+        self.assertEqual(
+            coordinator.pipeline.calls,
+            [(item.content_id, True) for item in items],
+        )
         self.assertEqual(source.downloads, [])
         self.assertEqual(coordinator.production_calls, 0)
-        self.assertEqual(report["processed"], 1)
+        self.assertEqual(report["processed"], 3)
 
-    def test_stock_downloads_only_approved_original_and_never_runs_production(self):
+    def test_stock_downloads_only_approved_items_in_source_order_and_never_produces(self):
         with tempfile.TemporaryDirectory() as td:
-            item = SimpleNamespace(
-                content_id="source-2:202",
-                telegram_message_id="202",
-                source_id="source-2",
-                topic_id=2,
-                topic_name="topic",
-                original_url="https://example.invalid/item",
-                affiliate_url="https://example.invalid/approved",
-                state=State.RECEIVED,
-                original_path=Path(td) / "source-2" / "202.mp4",
-            )
+            items = [
+                make_item(source_id, 300 + index, Path(td) / source_id / f"{300 + index}.mp4")
+                for index, source_id in enumerate(SOURCE_IDS, start=1)
+            ]
+            for item in items:
+                item.affiliate_url = "https://example.invalid/approved"
             source = FakeSource()
-            db = FakeDB([item])
+            db = FakeDB(items)
             coordinator = FakeCoordinator(source, db)
 
             report = asyncio.run(run_catch_up_stage(coordinator, "stock"))
 
-            self.assertEqual(source.downloads, [("source-2", "202")])
-            self.assertEqual(item.original_path.read_bytes(), b"APPROVED-ORIGINAL")
+            self.assertEqual(
+                source.downloads,
+                [(item.source_id, item.telegram_message_id) for item in items],
+            )
+            self.assertTrue(all(item.original_path.read_bytes() == b"APPROVED-ORIGINAL" for item in items))
             self.assertEqual(coordinator.pipeline.calls, [])
             self.assertEqual(coordinator.production_calls, 0)
-            self.assertEqual(report["processed"], 1)
+            self.assertEqual(report["processed"], 3)
 
 
 if __name__ == "__main__":
