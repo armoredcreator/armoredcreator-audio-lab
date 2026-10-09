@@ -166,6 +166,34 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(db.items, {})
         self.assertEqual(source.downloads, [])
 
+    def test_sync_reports_partial_counts_when_telegram_discovery_fails(self):
+        message = SimpleNamespace(
+            source_id=SOURCE_IDS[0],
+            telegram_message_id="101",
+            topic_id=1,
+            topic_name="topic-source-1",
+            original_url="https://example.invalid/101",
+            materialize=lambda _target: self.fail("sync stage must not download"),
+        )
+
+        class FailingDiscoverySource(FakeSource):
+            async def iter_historical_candidates_async(self):
+                yield message
+                raise RuntimeError("telegram-source-disconnected")
+
+        source = FailingDiscoverySource([message])
+        source.historical_scan_exhausted = False
+        coordinator = FakeCoordinator(source, FakeDB())
+
+        report = asyncio.run(run_catch_up_stage(coordinator, "sync"))
+
+        self.assertEqual(report["processed"], 1)
+        self.assertEqual(report["per_source"][SOURCE_IDS[0]], 1)
+        self.assertTrue(any("telegram-source-disconnected" in error for error in report["errors"]))
+        self.assertFalse(report["historical_scan_exhausted"])
+        self.assertFalse(report["historical_complete"])
+        self.assertEqual(source.downloads, [])
+
     def test_sync_stops_at_first_reservation_error(self):
         messages = [
             SimpleNamespace(
