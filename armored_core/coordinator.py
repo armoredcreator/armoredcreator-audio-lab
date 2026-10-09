@@ -37,7 +37,13 @@ class Coordinator:
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
 
     @classmethod
-    def build(cls, root: Path | None = None, bindings: Any | None = None):
+    def build(
+        cls,
+        root: Path | None = None,
+        bindings: Any | None = None,
+        *,
+        acquire_runtime_lock: bool = False,
+    ):
         storage = Storage(root)
         # Project-local credential source of truth.
         # Secrets live only in credentials/project.env; runtime modules continue
