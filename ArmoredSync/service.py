@@ -674,6 +674,7 @@ class TelegramSource:
         """Stream historical candidates without building a topic-sized list."""
         for topic_id, topic_name in topics:
             pending_video = None
+            pending_link: str | None = None
             pending_group_id = None
             pending_group: list[Any] = []
             topic_max_id = 0
@@ -699,6 +700,8 @@ class TelegramSource:
 
                 grouped_id = getattr(message, "grouped_id", None)
                 if grouped_id is not None:
+                    # Album links are resolved within the album itself.
+                    pending_link = None
                     grouped_id = int(grouped_id)
                     if pending_group_id is None:
                         if pending_video is not None:
@@ -732,29 +735,57 @@ class TelegramSource:
                     async for candidate in flush_group():
                         yield candidate
 
+                paired_pending_video = False
                 if pending_video is not None:
                     pending_id, pending_message = pending_video
                     if not getattr(message, "video", None):
                         original_url = self._shopee_url(message)
-                        if (
-                            pending_id not in self._seen
-                            and original_url is not None
-                            and not self._shopee_url_exists(original_url)
-                        ):
-                            yield (
-                                pending_id,
-                                int(topic_id),
-                                topic_name,
-                                pending_message,
-                                original_url,
-                            )
+                        if original_url is not None:
+                            paired_pending_video = True
+                            if (
+                                pending_id not in self._seen
+                                and not self._shopee_url_exists(original_url)
+                            ):
+                                yield (
+                                    pending_id,
+                                    int(topic_id),
+                                    topic_name,
+                                    pending_message,
+                                    original_url,
+                                )
                     pending_video = None
 
                 if not getattr(message, "video", None):
+                    # In Telegram's newest-first forum pages, the product link
+                    # may be the immediately newer message than its video.
+                    # Keep it for the next video; ascending general-chat scans
+                    # are handled by the pending_video branch above.
+                    pending_link = (
+                        None
+                        if paired_pending_video
+                        else self._shopee_url(message)
+                    )
                     continue
 
                 original_url = self._shopee_url(message)
                 if original_url is not None:
+                    pending_link = None
+                    if (
+                        message_id not in self._seen
+                        and not self._shopee_url_exists(original_url)
+                    ):
+                        yield (
+                            message_id,
+                            int(topic_id),
+                            topic_name,
+                            message,
+                            original_url,
+                        )
+                    continue
+
+                if pending_link is not None:
+                    original_url = pending_link
+                    pending_link = None
                     if (
                         message_id not in self._seen
                         and not self._shopee_url_exists(original_url)
