@@ -269,6 +269,44 @@ class VisionBeforeDownloadTests(unittest.TestCase):
                 coordinator.close()
 
 
+    def test_pre_download_technical_failure_stays_retryable_without_original(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionTechnicalFailure(),
+                _Studio(storage),
+                _Publisher(),
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "retryable-vision",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/retryable",
+                    original_path=storage.original("retryable-vision"),
+                )
+                with self.assertRaisesRegex(RuntimeError, "vision-provider-timeout"):
+                    coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.VISION)
+                self.assertFalse(item.original_path.is_file())
+                self.assertIn("vision-provider-timeout", db.last_error(item_id))
+
+                coordinator.pipeline.vision = _VisionResolved()
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+                item = db.get(item_id)
+                self.assertEqual(item.state, State.RECEIVED)
+                self.assertEqual(item.affiliate_url, "https://affiliate.invalid/product")
+                self.assertFalse(item.original_path.is_file())
+            finally:
+                coordinator.close()
+
+
 if __name__ == "__main__":
     unittest.main()
 
