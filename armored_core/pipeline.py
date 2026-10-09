@@ -300,21 +300,36 @@ class Pipeline:
             # download, preserve RECEIVED/VISION so the explicit Vision/Stock
             # stages can retry from SQLite instead of stranding the item.
             if (
-                current.state in (State.RECEIVED, State.VISION)
+                current.state != State.FAILED
                 and not current.original_path.is_file()
             ):
+                retry_state = (
+                    current.state
+                    if current.state in (State.RECEIVED, State.VISION)
+                    else (
+                        State.RECEIVED
+                        if current.affiliate_url
+                        else State.VISION
+                    )
+                )
+                if current.state != retry_state:
+                    self.db.transition(
+                        item_id,
+                        retry_state,
+                        "retryable-missing-original",
+                    )
                 self.db.record_retryable_error(item_id, reason)
                 self.log.error(
                     "[PIPELINE][ITEM %s] RETRYABLE sem ORIGINAL state=%s: %s",
                     item_id,
-                    current.state.value,
+                    retry_state.value,
                     exc,
                 )
                 self.trace.emit(
                     item_id,
                     "PIPELINE",
                     "RETRYABLE_NO_ORIGINAL",
-                    state=current.state.value,
+                    state=retry_state.value,
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )
