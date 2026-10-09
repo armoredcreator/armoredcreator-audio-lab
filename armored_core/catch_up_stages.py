@@ -157,6 +157,11 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 source_id=item.source_id,
             )
             if item.original_path != canonical_original:
+                old_path = item.original_path
+                if old_path.name and old_path.suffix:
+                    stale_partial = old_path.with_suffix(old_path.suffix + ".part")
+                    if stale_partial.is_file():
+                        stale_partial.unlink()
                 coordinator.db.repair_original_path(item.content_id, canonical_original)
                 item = coordinator.db.get(item.content_id)
 
