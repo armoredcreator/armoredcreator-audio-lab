@@ -52,11 +52,43 @@ class Storage:
             index = int(match.group(1)) if match else 1
         return self.storage / f"Videos GRUPO_FONTE_{index}"
 
-    @staticmethod
-    def _telegram_message_id(content_id: str | int, source_id: str | int | None = None) -> str:
+    def _source_for_content_id(
+        self,
+        content_id: str | int,
+        source_id: str | int | None = None,
+    ) -> str | None:
+        if source_id is not None and str(source_id).strip():
+            return str(source_id).strip()
+        value = str(content_id).strip()
+        for index in range(1, 100):
+            configured_values = (
+                os.getenv(f"ARMORED_SOURCE_{index}_ID"),
+                os.getenv(f"ARMORED_SOURCE_{index}_CHAT_ID"),
+                os.getenv(f"ARMORED_SOURCE_{index}_KEY"),
+            )
+            configured_values = tuple(str(item or "").strip() for item in configured_values)
+            if any(configured and value.startswith(f"{configured}_") for configured in configured_values):
+                return next(
+                    configured
+                    for configured in configured_values
+                    if configured and value.startswith(f"{configured}_")
+                )
+            if index > 1 and not any(configured_values) and not any(
+                os.getenv(f"ARMORED_SOURCE_{later}_{field}")
+                for later in range(index + 1, 100)
+                for field in ("ID", "CHAT_ID", "KEY")
+            ):
+                break
+        return None
+
+    def _telegram_message_id(
+        self,
+        content_id: str | int,
+        source_id: str | int | None = None,
+    ) -> str:
         """Strip the source namespace from the internal SQLite key for disk names."""
         value = str(content_id).strip()
-        source = str(source_id or "").strip()
+        source = self._source_for_content_id(value, source_id)
         prefix = f"{source}_"
         if source and value.startswith(prefix):
             value = value[len(prefix):]
@@ -66,8 +98,9 @@ class Storage:
 
     def workspace(self, telegram_message_id: str | int, source_id: str | int | None = None) -> Path:
         """Return the canonical source-separated workspace keyed by Telegram message ID."""
-        message_id = self._telegram_message_id(telegram_message_id, source_id)
-        path = self.source_workspace_root(source_id) / message_id
+        source = self._source_for_content_id(telegram_message_id, source_id)
+        message_id = self._telegram_message_id(telegram_message_id, source)
+        path = self.source_workspace_root(source) / message_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -78,12 +111,14 @@ class Storage:
         original_url: str | None = None,
         source_id: str | None = None,
     ) -> Path:
-        message_id = self._telegram_message_id(content_id, source_id)
-        return self.workspace(message_id, source_id=source_id) / f"{message_id}_finallinkoriginal{suffix}"
+        source = self._source_for_content_id(content_id, source_id)
+        message_id = self._telegram_message_id(content_id, source)
+        return self.workspace(content_id, source_id=source) / f"{message_id}_finallinkoriginal{suffix}"
 
     def working(self, content_id: str, source_id: str | None = None) -> Path:
-        message_id = self._telegram_message_id(content_id, source_id)
-        return self.workspace(message_id, source_id=source_id) / f"{message_id}_.mp4"
+        source = self._source_for_content_id(content_id, source_id)
+        message_id = self._telegram_message_id(content_id, source)
+        return self.workspace(content_id, source_id=source) / f"{message_id}_.mp4"
 
     def result(
         self,
@@ -92,5 +127,6 @@ class Storage:
         affiliate_name: str | None = None,
         source_id: str | None = None,
     ) -> Path:
-        message_id = self._telegram_message_id(content_id, source_id)
-        return self.workspace(message_id, source_id=source_id) / f"{message_id}_finaldomeulinknovo.mp4"
+        source = self._source_for_content_id(content_id, source_id)
+        message_id = self._telegram_message_id(content_id, source)
+        return self.workspace(content_id, source_id=source) / f"{message_id}_finaldomeulinknovo.mp4"
