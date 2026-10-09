@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 from pathlib import Path
@@ -27,7 +26,7 @@ def main() -> int:
     os.environ.setdefault("ARMORED_REQUIRED_SOURCE_COUNT", "3")
 
     logging.basicConfig(
-        level=os.getenv("ARMORED_LOG_LEVEL", "WARNING").upper(),
+        level=os.getenv("ARMORED_LOG_LEVEL", "ERROR").upper(),
         format="%(asctime)s | %(levelname)s | %(message)s",
         force=True,
     )
@@ -41,7 +40,7 @@ def main() -> int:
     logging.getLogger("armored_core.pipeline").setLevel(logging.CRITICAL)
     logging.getLogger("armored_core.services").setLevel(logging.CRITICAL)
     logging.getLogger("ArmoredSync.service").setLevel(logging.CRITICAL)
-    logging.getLogger("armored_core.catch_up_stages").setLevel(logging.INFO)
+    logging.getLogger("armored_core.catch_up_stages").setLevel(logging.CRITICAL)
 
     coordinator = None
     try:
@@ -55,13 +54,45 @@ def main() -> int:
                 "Esperadas exatamente 3 fontes Telegram configuradas; "
                 f"encontradas {len(routes)}."
             )
-        print(
-            f"[CATCH-UP] INÍCIO etapa={args.stage.upper()} | "
-            "log detalhado desativado; relatório final e erros serão exibidos"
-        )
+        print(f"[CATCH-UP] INÍCIO etapa={args.stage.upper()}")
         report = asyncio.run(run_catch_up_stage(coordinator, args.stage))
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 1 if report["errors"] else 0
+
+        source_counts = report.get("per_source", {})
+        source_summary = ",".join(
+            f"F{index}={source_counts.get(str(route.source_id), 0)}"
+            for index, route in enumerate(routes, start=1)
+        )
+        outcomes = report.get("outcomes", {})
+        if args.stage == "sync":
+            detail = (
+                f"reservas={outcomes.get('reserved', report.get('processed', 0))} "
+                f"varredura={'OK' if report.get('historical_scan_exhausted') else 'INCOMPLETA'}"
+            )
+        elif args.stage == "vision":
+            detail = (
+                f"aprovados={outcomes.get('approved_this_stage', 0)} "
+                f"waiting={outcomes.get('waiting_vision_this_stage', 0)} "
+                f"pendentes={outcomes.get('retryable_without_decision_total', 0)}"
+            )
+        else:
+            detail = (
+                f"baixados={outcomes.get('downloaded', report.get('processed', 0))} "
+                f"originais_existentes={outcomes.get('skipped_existing_original', 0)} "
+                f"faltantes={outcomes.get('approved_missing_original', 0)}"
+            )
+
+        errors = report.get("errors", [])
+        status = "FALHOU" if errors else "OK"
+        print(
+            f"[CATCH-UP] {status} etapa={args.stage.upper()} "
+            f"processados={report.get('processed', 0)} {source_summary} "
+            f"{detail} erros={len(errors)} checkpoint=preservado"
+        )
+        for error in errors[:10]:
+            print(f"[CATCH-UP][ERRO] {error}")
+        if len(errors) > 10:
+            print(f"[CATCH-UP][ERRO] ... mais {len(errors) - 10} erro(s) omitido(s)")
+        return 1 if errors else 0
     except KeyboardInterrupt:
         logging.warning("[CATCH-UP] Interrompido pelo operador; estado durável preservado.")
         return 130
