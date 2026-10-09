@@ -43,5 +43,5 @@ Após o relatório de Stock, pare. Não execute `START_ALL.bat` nem `run_coordin
 - O SQLite é a fonte de verdade; não apague nem recrie o banco/storage para repetir uma etapa.
 - As etapas são idempotentes em relação às reservas duráveis; uma etapa pode ser repetida após interrupção.
 - Não se marca o histórico como completo nem se avança para LIVE durante Sync, Vision ou Stock.
-- Cada comando encerra após a etapa escolhida. Não há avanço automático entre as três.
+- Cada comando encerra após a etapa escolhida. Não há avanço automático entre as três. O modo staged não instancia Studio/RVC, IA ou Hub.
 - Use os IDs de fonte e tópicos definidos em `credentials/project.env`; nunca publique esse arquivo ou seus segredos nos logs. O PowerShell mostra início, erros e um relatório final compacto; o progresso detalhado de download fica desativado por padrão e só aparece se `ARMORED_SYNC_VERBOSE_PROGRESS=1`.
