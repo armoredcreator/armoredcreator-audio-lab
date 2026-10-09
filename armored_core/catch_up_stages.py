@@ -61,6 +61,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     errors: list[str] = []
     processed_count = 0
     skipped_existing_original = 0
+    approved_this_stage = 0
+    waiting_this_stage = 0
 
     if stage == "sync":
         if bool(getattr(source, "historical_collection_limited", False)):
@@ -144,6 +146,10 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 current = coordinator.db.get(item.content_id)
                 per_source[str(current.source_id)] += 1
                 processed_count += 1
+                if current.state == State.WAITING_VISION:
+                    waiting_this_stage += 1
+                elif current.state == State.RECEIVED and current.affiliate_url:
+                    approved_this_stage += 1
                 if processed_count % 10 == 0:
                     log.info("[VISION] candidatos avaliados=%s", processed_count)
                 if current.state == State.RECOVERY:
@@ -266,9 +272,11 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     if stage == "sync":
         outcomes["reserved"] = processed_count
     elif stage == "vision":
-        outcomes["approved"] = int(approved)
-        outcomes["waiting_vision"] = int(waiting)
-        outcomes["retryable_without_decision"] = int(retryable)
+        outcomes["approved_this_stage"] = approved_this_stage
+        outcomes["waiting_vision_this_stage"] = waiting_this_stage
+        outcomes["approved_total"] = int(approved)
+        outcomes["waiting_vision_total"] = int(waiting)
+        outcomes["retryable_without_decision_total"] = int(retryable)
         outcomes["recovered_pre_download_recovery"] = len(pre_download_recovery)
         outcomes["recovered_approved_evidence"] = len(interrupted_approved)
     else:
