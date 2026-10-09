@@ -116,6 +116,18 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             errors.append("sync:limite de coleta configurado; histórico não pode ser declarado completo")
 
     elif stage == "vision":
+        # Repair legacy pre-download RECOVERY rows. Recovery is valid only
+        # when an immutable ORIGINAL exists; otherwise retry from the durable
+        # Vision decision instead of stranding the candidate.
+        pre_download_recovery = coordinator.db.pre_download_recovery_items()
+        for item in _ordered(pre_download_recovery, source):
+            target_state = State.RECEIVED if item.affiliate_url else State.VISION
+            coordinator.db.transition(
+                item.content_id,
+                target_state,
+                "catch-up-repaired-recovery-without-original",
+            )
+
         # Recover the narrow crash window after Vision evidence is committed
         # but before Pipeline transitions VISION -> RECEIVED.
         interrupted_approved = coordinator.db.vision_approved_interrupted_items()
@@ -243,6 +255,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         outcomes["approved"] = int(approved)
         outcomes["waiting_vision"] = int(waiting)
         outcomes["retryable_without_decision"] = int(retryable)
+        outcomes["recovered_pre_download_recovery"] = len(pre_download_recovery)
         outcomes["recovered_approved_evidence"] = len(interrupted_approved)
     else:
         outcomes["downloaded"] = len(processed)
