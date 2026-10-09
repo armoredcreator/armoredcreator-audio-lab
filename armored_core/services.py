@@ -83,13 +83,20 @@ class SyncService:
                 if not original.name:
                     stored_path = ""
             if not stored_path:
-                # Repair legacy rows deterministically from the stable Telegram ID + URL.
+                # Repair legacy rows deterministically from the stable Telegram ID.
                 original = self.storage.original(
                     item_id,
                     ".mp4",
                     original_url=existing["original_url"] or message.original_url,
                     source_id=message.source_id,
                 )
+                # Only incomplete .part artifacts are disposable. Remove stale
+                # partials in this item's workspace before restarting the download.
+                for stale_partial in original.parent.glob("*.part"):
+                    try:
+                        stale_partial.unlink()
+                    except FileNotFoundError:
+                        pass
                 self.db.repair_original_path(item_id, original)
             partial = original.with_suffix(original.suffix + ".part")
             return item_id, original, partial
