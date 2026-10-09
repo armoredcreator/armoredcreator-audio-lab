@@ -629,15 +629,13 @@ class TelegramSource:
         messages: list[Any],
         topic_id: int,
         topic_name: str,
-    ) -> list[tuple[int, int, str, Any, str]]:
-        """Resolve one Telegram media group into one-or-more safe candidates.
+    ) -> list[tuple[int, int, str, Any, str | None]]:
+        """Resolve video media in an album without silently dropping unlinked videos.
 
-        A grouped album can contain photos, videos, and the Shopee link on a
-        different media item. When there is exactly one unique Shopee link in
-        the group, the group represents one content and one video is selected
-        deterministically. If multiple distinct links exist in the same group,
-        only videos that carry their own link are preserved automatically; links
-        living only on photos remain ambiguous and are not guessed.
+        A single unique Shopee link on an album is attached to one deterministic
+        video. With multiple links, only links attached to each video are trusted;
+        unlinked videos are still reserved with no URL so Vision can preserve
+        them as WAITING_VISION instead of silently skipping Telegram content.
         """
         videos = [message for message in messages if self._is_video_message(message)]
         if not videos:
@@ -653,7 +651,6 @@ class TelegramSource:
             original_url = next(iter(unique_links.values()))
             if self._shopee_url_exists(original_url):
                 return []
-
             linked_videos = [
                 message for message in videos if self._shopee_url(message) is not None
             ]
@@ -664,41 +661,30 @@ class TelegramSource:
             selected_id = int(getattr(selected, "id", 0) or 0)
             if selected_id <= 0 or selected_id in self._seen:
                 return []
-            return [(
-                selected_id,
-                int(topic_id),
-                topic_name,
-                selected,
-                original_url,
-            )]
+            return [(selected_id, int(topic_id), topic_name, selected, original_url)]
 
-        if len(unique_links) > 1:
-            candidates = []
-            emitted_links: set[str] = set()
-            for message in sorted(
-                videos,
-                key=lambda value: int(getattr(value, "id", 0) or 0),
-            ):
-                url = self._shopee_url(message)
-                if not url:
-                    continue
+        candidates: list[tuple[int, int, str, Any, str | None]] = []
+        emitted_links: set[str] = set()
+        for message in sorted(
+            videos,
+            key=lambda value: int(getattr(value, "id", 0) or 0),
+        ):
+            message_id = int(getattr(message, "id", 0) or 0)
+            if message_id <= 0 or message_id in self._seen:
+                continue
+            url = self._shopee_url(message)
+            if url:
                 key = url.casefold()
                 if key in emitted_links or self._shopee_url_exists(url):
                     continue
-                message_id = int(getattr(message, "id", 0) or 0)
-                if message_id <= 0 or message_id in self._seen:
-                    continue
                 emitted_links.add(key)
-                candidates.append((
-                    message_id,
-                    int(topic_id),
-                    topic_name,
-                    message,
-                    url,
-                ))
-            return candidates
-
-        return []
+                candidates.append((message_id, int(topic_id), topic_name, message, url))
+            elif not unique_links:
+                candidates.append((message_id, int(topic_id), topic_name, message, None))
+            else:
+                # A link attached only to a different media item is ambiguous.
+                candidates.append((message_id, int(topic_id), topic_name, message, None))
+        return candidates
 
     async def _candidate_iterator(self, source: str, topics: list[tuple[int, str]]):
         """Stream historical candidates without building a topic-sized list."""
