@@ -257,7 +257,7 @@ class TelegramSource:
         """Accept Telegram videos sent as media or as generic video documents."""
         if message is None:
             return False
-        if self._is_video_message(message):
+        if getattr(message, "video", None):
             return True
         document = getattr(message, "document", None)
         if document is None:
@@ -773,7 +773,7 @@ class TelegramSource:
                                 )
                     pending_video = None
 
-                if not getattr(message, "video", None):
+                if not self._is_video_message(message):
                     # In Telegram's newest-first forum pages, the product link
                     # may be the immediately newer message than its video.
                     # Keep it for the next video; ascending general-chat scans
@@ -1000,7 +1000,7 @@ class TelegramSource:
                         index = next_index
                         continue
 
-                    if getattr(message, "video", None):
+                    if self._is_video_message(message):
                         original_url = self._shopee_url(message)
                         if original_url is None and index + 1 < len(messages):
                             next_message = messages[index + 1]
@@ -1138,7 +1138,7 @@ class TelegramSource:
                     index = next_index
                     continue
 
-                if not getattr(message, "video", None):
+                if not self._is_video_message(message):
                     safe_checkpoint = max(safe_checkpoint, message_id)
                     index += 1
                     continue
