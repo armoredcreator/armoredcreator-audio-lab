@@ -36,9 +36,14 @@ def main() -> int:
         "httpx", "httpcore", "asyncio", "torch", "transformers",
     ):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
+    # The stage runner reports one concise item error itself; suppress duplicate
+    # pipeline stack/log lines while keeping unrelated critical failures visible.
+    logging.getLogger("armored_core.pipeline").setLevel(logging.CRITICAL)
+    logging.getLogger("armored_core.catch_up_stages").setLevel(logging.INFO)
 
-    coordinator = Coordinator.build(root=root)
+    coordinator = None
     try:
+        coordinator = Coordinator.build(root=root)
         # Use the same SQLite runtime lease as the production Coordinator.
         # Never run a staged operation concurrently with another process on this DB.
         coordinator.db.acquire_runtime_lock("coordinator")
@@ -64,7 +69,8 @@ def main() -> int:
         logging.error("[CATCH-UP] Etapa encerrada: %s", exc)
         return 1
     finally:
-        coordinator.close()
+        if coordinator is not None:
+            coordinator.close()
 
 
 if __name__ == "__main__":
