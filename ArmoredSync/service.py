@@ -180,14 +180,15 @@ class TelegramSource:
             return None
         try:
             value = int(raw)
-        except ValueError:
-            print(f"[SYNC][CATCH-UP] Limite inválido {raw!r}; CATCH-UP completo.")
-            return None
+        except ValueError as exc:
+            raise ValueError(
+                "ARMORED_SYNC_CATCHUP_LIMIT deve ser 0 (ilimitado) ou inteiro positivo"
+            ) from exc
         if value < 0:
-            print(f"[SYNC][CATCH-UP] Limite {value} inválido; use 0 para ilimitado ou um inteiro positivo.")
-            return None
+            raise ValueError(
+                "ARMORED_SYNC_CATCHUP_LIMIT não pode ser negativo; use 0 para ilimitado"
+            )
         if value == 0:
-            print("[SYNC][CATCH-UP] Limite 0 = CATCH-UP ilimitado.")
             return None
         return value
 
