@@ -60,6 +60,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
     )
     errors: list[str] = []
     processed: list[str] = []
+    skipped_existing_original = 0
 
     if stage == "sync":
         iterator_factory = getattr(source, "iter_historical_candidates_async", None)
@@ -137,7 +138,22 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             "SELECT COUNT(*) FROM items WHERE state=?",
             (State.WAITING_VISION.value,),
         ).fetchone()[0]
-        log.info("[CATCH-UP][VISION] Itens WAITING_VISION preservados: %s", waiting)
+        approved = coordinator.db.conn.execute(
+            "SELECT COUNT(*) FROM items WHERE state=? "
+            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>''",
+            (State.RECEIVED.value,),
+        ).fetchone()[0]
+        retryable = coordinator.db.conn.execute(
+            "SELECT COUNT(*) FROM items WHERE state=? "
+            "AND (affiliate_url IS NULL OR TRIM(affiliate_url)='')",
+            (State.VISION.value,),
+        ).fetchone()[0]
+        log.info(
+            "[CATCH-UP][VISION] aprovados=%s aguardando=%s retryable=%s",
+            approved,
+            waiting,
+            retryable,
+        )
 
     else:  # stock
         candidates = _ordered(coordinator.db.pending_vision_approved_items(), source)
@@ -145,6 +161,7 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             if item.state != State.RECEIVED or not item.affiliate_url:
                 continue
             if item.original_path.is_file():
+                skipped_existing_original += 1
                 continue
 
             # Rows created by earlier lab iterations may contain the old
@@ -207,13 +224,35 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     exc,
                 )
 
+    outcomes: dict[str, int] = {}
+    if stage == "sync":
+        outcomes["reserved"] = len(processed)
+    elif stage == "vision":
+        outcomes["approved"] = int(approved)
+        outcomes["waiting_vision"] = int(waiting)
+        outcomes["retryable_without_decision"] = int(retryable)
+        outcomes["recovered_approved_evidence"] = len(interrupted_approved)
+    else:
+        outcomes["downloaded"] = len(processed)
+        outcomes["skipped_existing_original"] = skipped_existing_original
+        remaining = coordinator.db.conn.execute(
+            "SELECT COUNT(*) FROM items WHERE state=? "
+            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "AND (original_path IS NULL OR TRIM(original_path)='')",
+            (State.RECEIVED.value,),
+        ).fetchone()[0]
+        outcomes["approved_missing_original_path"] = int(remaining)
+
     report = {
         "stage": stage,
         "processed": len(processed),
         "per_source": dict(per_source),
+        "outcomes": outcomes,
         "errors": errors,
-        "historical_scan_exhausted": bool(
-            getattr(source, "historical_scan_exhausted", False)
+        "historical_scan_exhausted": (
+            bool(getattr(source, "historical_scan_exhausted", False))
+            if stage == "sync"
+            else None
         ),
         "historical_complete": bool(
             source.is_historical_complete()
