@@ -443,6 +443,17 @@ class Database:
         ).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
 
+    def pre_download_recovery_items(self) -> list[Item]:
+        """Return RECOVERY rows that violate the immutable-ORIGINAL invariant."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE state=? "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.RECOVERY.value,),
+        ).fetchall()
+        items = [self.get(str(row["content_id"])) for row in rows]
+        return [item for item in items if not item.original_path.is_file()]
+
     def vision_approved_interrupted_items(self) -> list[Item]:
         """Find Vision rows where evidence was committed before a crash.
 
