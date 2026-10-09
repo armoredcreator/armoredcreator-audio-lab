@@ -79,6 +79,10 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 source_id = str(getattr(message, "source_id", "") or "")
                 message_id = str(message.telegram_message_id)
                 try:
+                    if source_id not in per_source:
+                        raise ValueError(f"unconfigured-source-id:{source_id!r}")
+                    if not message_id.isdigit() or int(message_id) <= 0:
+                        raise ValueError(f"invalid-telegram-message-id:{message_id!r}")
                     ingest = IngestMessage(
                         telegram_message_id=message_id,
                         source_id=source_id,
@@ -128,7 +132,11 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         # Vision decision instead of stranding the candidate.
         pre_download_recovery = coordinator.db.pre_download_recovery_items()
         for item in _ordered(pre_download_recovery, source):
-            target_state = State.RECEIVED if item.affiliate_url else State.VISION
+            target_state = (
+                State.RECEIVED
+                if str(item.affiliate_url or "").strip()
+                else State.VISION
+            )
             coordinator.db.transition(
                 item.content_id,
                 target_state,
