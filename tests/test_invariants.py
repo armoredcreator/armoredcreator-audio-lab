@@ -114,7 +114,7 @@ class InvariantTests(unittest.TestCase):
             self.assertEqual(item.original_path.read_bytes(), b"TELEGRAM-BYTES")
             self.assertEqual(item.original_sha256, hashlib.sha256(b"TELEGRAM-BYTES").hexdigest())
             self.assertFalse((root / "storage" / "sync").exists())
-            self.assertEqual([p.name for p in item.workspace.iterdir()], ["1383_example.mp4"])
+            self.assertEqual([p.name for p in item.workspace.iterdir()], ["1383_finallinkoriginal.mp4"])
             db.close()
 
     def test_missing_original_blocks_processing(self):
@@ -129,7 +129,8 @@ class InvariantTests(unittest.TestCase):
             original.unlink()
             with self.assertRaises(FileNotFoundError):
                 Pipeline(db, st, V(), S(st), P()).run(i)
-            self.assertEqual(db.get(i).state, State.RECOVERY)
+            self.assertEqual(db.get(i).state, State.RECEIVED)
+            self.assertIn("immutable-original-missing", db.last_error(i))
             db.close()
 
 if __name__ == "__main__":
