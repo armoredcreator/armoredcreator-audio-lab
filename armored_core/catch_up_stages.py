@@ -113,6 +113,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     # preserve source/message ordering and make the incomplete scan
                     # visible to the operator.
                     break
+        except Exception as exc:
+            errors.append(f"sync:discovery:{type(exc).__name__}:{exc}")
+            log.error("[CATCH-UP][SYNC] Descoberta interrompida: %s", exc)
         finally:
             await coordinator._release_source_connection()
 
