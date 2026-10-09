@@ -179,6 +179,7 @@ class CatchUpStageTests(unittest.TestCase):
             for index, source_id in enumerate(SOURCE_IDS, start=1)
         ]
         source = FakeSource(messages)
+        source.historical_scan_exhausted = False
         db = FakeDB()
         coordinator = FakeCoordinator(source, db)
         original_reserve = coordinator.sync.reserve_message
