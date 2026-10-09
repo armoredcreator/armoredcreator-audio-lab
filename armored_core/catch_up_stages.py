@@ -94,16 +94,21 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                         marker(message_id)
                     per_source[source_id] += 1
                     processed_count += 1
-                    if processed_count % 100 == 0:
-                        log.info("[SYNC] reservas confirmadas=%s", processed_count)
                 except Exception as exc:
                     errors.append(f"sync:{source_id}:{message_id}:{exc}")
+                    marker = getattr(source, "mark_materialization_failed", None)
+                    if callable(marker):
+                        marker()
                     log.error(
                         "[CATCH-UP][SYNC] Falha source=%s mensagem=%s: %s",
                         source_id,
                         message_id,
                         exc,
                     )
+                    # Do not reserve later messages after a failed durable write:
+                    # preserve source/message ordering and make the incomplete scan
+                    # visible to the operator.
+                    break
         finally:
             await coordinator._release_source_connection()
 
@@ -150,8 +155,6 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     waiting_this_stage += 1
                 elif current.state == State.RECEIVED and current.affiliate_url:
                     approved_this_stage += 1
-                if processed_count % 10 == 0:
-                    log.info("[VISION] candidatos avaliados=%s", processed_count)
                 if current.state == State.RECOVERY:
                     errors.append(f"vision:{item.content_id}:falha técnica em RECOVERY")
             except Exception as exc:
@@ -253,8 +256,6 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     raise FileNotFoundError(f"original ausente após download: {current.original_path}")
                 per_source[str(current.source_id)] += 1
                 processed_count += 1
-                if processed_count % 10 == 0:
-                    log.info("[STOCK] originais baixados=%s", processed_count)
             except Exception as exc:
                 errors.append(f"stock:{item.content_id}:{exc}")
                 marker = getattr(source, "mark_materialization_failed", None)
