@@ -62,6 +62,9 @@ class FakeDB:
     def get(self, item_id):
         return self.items[item_id]
 
+    def repair_original_path(self, item_id, path):
+        self.items[item_id].original_path = Path(path)
+
     def historical_complete(self):
         return False
 
@@ -114,6 +117,10 @@ class FakeCoordinator:
         self.db = db
         self.sync = FakeSync(db)
         self.pipeline = FakePipeline(db)
+        self.storage = SimpleNamespace(
+            original=lambda content_id, suffix, original_url=None, source_id=None:
+                self.db.get(content_id).original_path
+        )
         self.production_calls = 0
 
     async def _release_source_connection(self):
