@@ -391,7 +391,7 @@ class TelegramSource:
         try:
             result = await self.reader.client(
                 functions.messages.GetForumTopicsRequest(
-                    peer=source,
+                    peer=entity,
                     q=None,
                     offset_date=offset_date,
                     offset_id=offset_id,
@@ -439,7 +439,7 @@ class TelegramSource:
             offset_topic, offset_id, offset_date = next_topic, next_id, next_date
             result = await self.reader.client(
                 functions.messages.GetForumTopicsRequest(
-                    peer=source,
+                    peer=entity,
                     q=None,
                     offset_date=offset_date,
                     offset_id=offset_id,
