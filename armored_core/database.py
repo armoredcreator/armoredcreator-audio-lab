@@ -636,6 +636,19 @@ class Database:
         )
         self.conn.commit()
 
+    def record_retryable_error(self, item_id: str, error: str) -> None:
+        """Persist a technical error without moving a pre-download item to RECOVERY."""
+        current = self.get(item_id)
+        self.conn.execute(
+            "UPDATE items SET last_error=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (str(error), str(item_id)),
+        )
+        self.conn.execute(
+            "INSERT INTO state_events (content_id,old_state,new_state,reason) VALUES (?,?,?,?)",
+            (str(item_id), current.state.value, current.state.value, str(error)),
+        )
+        self.conn.commit()
+
     def fail(self, item_id: str, error: str) -> None:
         self.conn.execute(
             "UPDATE items SET state=?, last_error=?, updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
