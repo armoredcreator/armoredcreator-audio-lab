@@ -93,6 +93,11 @@ class Coordinator:
 
                 vision = ArmoredVision()
                 routes = load_routes()
+                if staged and len(routes) != 3:
+                    raise RuntimeError(
+                        "Execução por etapas exige exatamente 3 fontes Telegram; "
+                        f"foram configuradas {len(routes)}."
+                    )
                 legacy_source_id = (os.getenv("ARMORED_SYNC_SOURCE_ID") or os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
                 for route in routes:
                     db.initialize_source_state(route.source.source_id, legacy_source_id=legacy_source_id or None)
