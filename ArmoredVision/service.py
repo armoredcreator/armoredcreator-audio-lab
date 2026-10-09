@@ -34,7 +34,9 @@ class ArmoredVision:
     def identify(self, item: Item) -> VisionResult:
         original = (item.original_url or "").strip()
         if not original:
-            raise RuntimeError("Vision: original Shopee URL ausente")
+            raise VisionUnresolvedError(
+                "Vision não recebeu link Shopee; vídeo preservado em WAITING_VISION"
+            )
 
         try:
             resolved = resolve_short_url(original)
