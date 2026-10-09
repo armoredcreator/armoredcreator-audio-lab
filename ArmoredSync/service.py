@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -340,32 +341,86 @@ class TelegramSource:
         return not recoverable
 
     async def _discover_topics(self, source: str) -> list[tuple[int, str]]:
+        """Discover every forum topic, or fall back to the whole chat history.
+
+        Telegram sources are not required to be forum supergroups. A regular
+        channel/group is represented by the synthetic topic 0 ("Geral") and
+        streamed through iter_messages. Forum pagination is continued until
+        Telegram returns no new topics.
+        """
         from telethon import functions
-        result = await self.reader.client(
-            functions.messages.GetForumTopicsRequest(
-                peer=source,
-                q=None,
-                offset_date=None,
-                offset_id=0,
-                offset_topic=0,
-                limit=100,
-            )
-        )
+
         topics: list[tuple[int, str]] = []
-        for topic in getattr(result, "topics", []) or []:
-            topic_id = getattr(topic, "id", None)
-            if topic_id is not None:
-                topics.append((int(topic_id), str(getattr(topic, "title", None) or topic_id).strip()))
-        return topics
+        seen: set[int] = set()
+        offset_topic = 0
+        offset_id = 0
+        offset_date = None
+        try:
+            result = await self.reader.client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=source,
+                    q=None,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100,
+                )
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).info(
+                "[SYNC][DISCOVERY] Fonte sem listagem de tópicos; usando histórico geral (%s)",
+                type(exc).__name__,
+            )
+            return [(0, "Geral")]
+
+        while True:
+            page = list(getattr(result, "topics", []) or [])
+            new_topics = []
+            for topic in page:
+                topic_id = getattr(topic, "id", None)
+                if topic_id is None:
+                    continue
+                topic_id = int(topic_id)
+                if topic_id in seen:
+                    continue
+                seen.add(topic_id)
+                title = str(getattr(topic, "title", None) or topic_id).strip()
+                topics.append((topic_id, title))
+                new_topics.append(topic)
+            if not page or not new_topics or len(page) < 100:
+                break
+
+            last = page[-1]
+            next_topic = int(getattr(last, "id", 0) or 0)
+            next_id = int(getattr(last, "top_message", 0) or 0)
+            next_date = getattr(last, "date", None)
+            if not next_topic or next_topic == offset_topic:
+                break
+            offset_topic, offset_id, offset_date = next_topic, next_id, next_date
+            result = await self.reader.client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=source,
+                    q=None,
+                    offset_date=offset_date,
+                    offset_id=offset_id,
+                    offset_topic=offset_topic,
+                    limit=100,
+                )
+            )
+
+        return topics or [(0, "Geral")]
 
     async def _topic_messages(self, source: str, topic_id: int):
-        """Yield historical messages page-by-page.
+        """Stream history for one forum topic or for an ordinary Telegram chat."""
+        if int(topic_id) == 0:
+            async for message in self.reader.client.iter_messages(
+                source,
+                limit=None,
+                reverse=True,
+            ):
+                yield message
+            return
 
-        The backup processed Telegram pages incrementally. Do the same here:
-        never build the complete topic history in memory before candidate
-        detection. The caller keeps the Telegram connection open for the whole
-        catch-up batch, so candidates can still be materialized safely.
-        """
         from telethon import functions
         offset_id = 0
         while True:
@@ -446,18 +501,19 @@ class TelegramSource:
                 now = asyncio.get_running_loop().time()
                 if now - last_report >= 5:
                     last_report = now
-                    if telegram_size:
-                        pct = downloaded * 100.0 / int(telegram_size)
-                        print(
-                            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
-                            f"{downloaded / 1048576:.1f}/{int(telegram_size) / 1048576:.1f} MiB "
-                            f"({pct:.0f}%)"
-                        )
-                    else:
-                        print(
-                            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
-                            f"{downloaded / 1048576:.1f} MiB"
-                        )
+                    if os.getenv("ARMORED_SYNC_VERBOSE_PROGRESS", "0") == "1":
+                        if telegram_size:
+                            pct = downloaded * 100.0 / int(telegram_size)
+                            print(
+                                f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
+                                f"{downloaded / 1048576:.1f}/{int(telegram_size) / 1048576:.1f} MiB "
+                                f"({pct:.0f}%)"
+                            )
+                        else:
+                            print(
+                                f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} "
+                                f"{downloaded / 1048576:.1f} MiB"
+                            )
 
         actual_size = target.stat().st_size if target.exists() else 0
         elapsed = max(asyncio.get_running_loop().time() - started, 0.001)
@@ -465,9 +521,11 @@ class TelegramSource:
             raise RuntimeError("download retornou arquivo vazio")
         if telegram_size is not None and actual_size != int(telegram_size):
             raise RuntimeError(f"download incompleto: {actual_size} bytes de {int(telegram_size)}")
-        print(
-            f"[SYNC][DOWNLOAD] {getattr(message, 'id', '?')} concluído "
-            f"{actual_size / 1048576:.1f} MiB em {elapsed:.1f}s"
+        logging.getLogger(__name__).info(
+            "[SYNC][DOWNLOAD] %s OK | %.1f MiB | %.1fs",
+            getattr(message, "id", "?"),
+            actual_size / 1048576,
+            elapsed,
         )
 
     async def materialize_candidate_async(self, telegram_message_id: str, target: Path) -> None:
@@ -732,7 +790,7 @@ class TelegramSource:
                         original_url,
                     )
 
-            if topic_max_id:
+            if topic_max_id and int(topic_id) > 0:
                 self._historical_checkpoints[topic_id] = topic_max_id
 
     async def iter_historical_candidates_async(self):
