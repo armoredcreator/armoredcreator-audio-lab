@@ -296,11 +296,32 @@ class Pipeline:
                 self.trace.emit(item_id, "PIPELINE", "SHUTDOWN", state=current.state.value, error_type=type(exc).__name__, error=str(exc))
                 raise KeyboardInterrupt from exc
             reason = f"{type(exc).__name__}: {exc}"
-            # Processing-stage failures are recoverable by default. The item
-            # remains the single authoritative candidate and the Coordinator
-            # must reconcile/resume it from the persisted artifacts/state on
-            # the next recovery pass. Generic exceptions must never silently
-            # abandon the current candidate.
+            # Recovery is valid only when the immutable ORIGINAL exists. Before
+            # download, preserve RECEIVED/VISION so the explicit Vision/Stock
+            # stages can retry from SQLite instead of stranding the item.
+            if (
+                current.state in (State.RECEIVED, State.VISION)
+                and not current.original_path.is_file()
+            ):
+                self.db.record_retryable_error(item_id, reason)
+                self.log.error(
+                    "[PIPELINE][ITEM %s] RETRYABLE sem ORIGINAL state=%s: %s",
+                    item_id,
+                    current.state.value,
+                    exc,
+                )
+                self.trace.emit(
+                    item_id,
+                    "PIPELINE",
+                    "RETRYABLE_NO_ORIGINAL",
+                    state=current.state.value,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise
+
+            # Processing-stage failures with an immutable ORIGINAL are
+            # recoverable from durable artifacts/state.
             self.db.transition(item_id, State.RECOVERY, reason)
             self.log.error(
                 "[PIPELINE][ITEM %s] ERRO RECOVERABLE state=%s: %s",
