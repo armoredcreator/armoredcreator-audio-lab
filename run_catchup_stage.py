@@ -59,7 +59,7 @@ def main() -> int:
 
         source_counts = report.get("per_source", {})
         source_summary = ",".join(
-            f"F{index}={source_counts.get(str(route.source_id), 0)}"
+            f"F{index}[{route.source_id}]={source_counts.get(str(route.source_id), 0)}"
             for index, route in enumerate(routes, start=1)
         )
         outcomes = report.get("outcomes", {})
@@ -70,8 +70,10 @@ def main() -> int:
             )
         elif args.stage == "vision":
             detail = (
-                f"aprovados={outcomes.get('approved_this_stage', 0)} "
-                f"waiting={outcomes.get('waiting_vision_this_stage', 0)} "
+                f"aprovados_novos={outcomes.get('approved_this_stage', 0)} "
+                f"waiting_novos={outcomes.get('waiting_vision_this_stage', 0)} "
+                f"aprovados_total={outcomes.get('approved_total', 0)} "
+                f"waiting_total={outcomes.get('waiting_vision_total', 0)} "
                 f"pendentes={outcomes.get('retryable_without_decision_total', 0)}"
             )
         else:
