@@ -747,52 +747,67 @@ class Database:
         ).fetchone()
 
     def acquire_runtime_lock(self, name: str = "coordinator") -> None:
-        """Acquire the single-process runtime lease stored in SQLite.
+        """Atomically acquire the single-process lease stored in SQLite.
 
-        The lease intentionally lives in the database, not in a legacy lock
-        directory/file. A crashed process leaves the row behind; on restart,
-        a dead PID is deterministically replaced. A live PID blocks a second
-        Coordinator from starting.
+        BEGIN IMMEDIATE serializes the check-and-claim operation across
+        processes. A crashed process leaves its row behind; a dead PID can be
+        replaced, while a live PID blocks a second Coordinator.
         """
+        import errno
         import os
+        from datetime import datetime, timezone
 
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS runtime_locks (
-                name TEXT PRIMARY KEY,
-                pid INTEGER NOT NULL,
-                started_at TEXT NOT NULL,
-                heartbeat_at TEXT NOT NULL
-            )"""
-        )
-        row = self.conn.execute(
-            "SELECT pid FROM runtime_locks WHERE name=?", (str(name),)
-        ).fetchone()
-        current_pid = os.getpid()
-        if row is not None:
-            pid = int(row["pid"])
-            # A live PID is always an active owner, including when a second
-            # Coordinator object is created inside the same process. This keeps
-            # the one-Coordinator invariant independent of process boundaries.
-            alive = pid == current_pid
-            if not alive:
-                try:
-                    os.kill(pid, 0)
-                    alive = True
-                except OSError:
-                    alive = False
-            if alive:
-                raise RuntimeError(
-                    f"runtime-lock-active: {name} is already owned by PID {pid}"
-                )
+        now = datetime.now(timezone.utc).isoformat()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                """CREATE TABLE IF NOT EXISTS runtime_locks (
+                    name TEXT PRIMARY KEY,
+                    pid INTEGER NOT NULL,
+                    started_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL
+                )"""
+            )
+            row = self.conn.execute(
+                "SELECT pid FROM runtime_locks WHERE name=?", (str(name),)
+            ).fetchone()
+            current_pid = os.getpid()
+            if row is not None:
+                pid = int(row["pid"])
+                # Same-process ownership is still exclusive: a second
+                # Coordinator object must not share this runtime lease.
+                alive = pid == current_pid
+                if not alive:
+                    try:
+                        os.kill(pid, 0)
+                        alive = True
+                    except PermissionError:
+                        alive = True
+                    except ProcessLookupError:
+                        alive = False
+                    except OSError as exc:
+                        # Windows reports an absent process as WinError 87;
+                        # ESRCH is the corresponding POSIX result. Other OS
+                        # errors are treated conservatively as a live process.
+                        alive = not (
+                            getattr(exc, "errno", None) == errno.ESRCH
+                            or getattr(exc, "winerror", None) == 87
+                        )
+                if alive:
+                    raise RuntimeError(
+                        f"runtime-lock-active: {name} is already owned by PID {pid}"
+                    )
 
-        self.conn.execute(
-            "INSERT INTO runtime_locks(name,pid,started_at,heartbeat_at) VALUES(?,?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET pid=excluded.pid, "
-            "started_at=excluded.started_at, heartbeat_at=excluded.heartbeat_at",
-            (str(name), current_pid, now, now),
-        )
-        self.conn.commit()
+            self.conn.execute(
+                "INSERT INTO runtime_locks(name,pid,started_at,heartbeat_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET pid=excluded.pid, "
+                "started_at=excluded.started_at, heartbeat_at=excluded.heartbeat_at",
+                (str(name), current_pid, now, now),
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def heartbeat_runtime_lock(self, name: str = "coordinator") -> None:
         import os
