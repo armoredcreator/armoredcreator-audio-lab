@@ -3,7 +3,11 @@ from __future__ import annotations
 from armored_core.models import Item
 from armored_core.services import VisionResult, VisionUnresolvedError
 
-from .modules.v1.shopee_api import ShopeeAffiliateAPI, ShopeeProductNotFoundError
+from .modules.v1.shopee_api import (
+    ShopeeAffiliateAPI,
+    ShopeeAPIError,
+    ShopeeProductNotFoundError,
+)
 from .modules.v1.shopee_resolver import resolve_short_url
 
 
@@ -62,7 +66,26 @@ class ArmoredVision:
         # The incoming URL is identification input only. The final affiliate
         # link must come from the exact V1-resolved product, never from a
         # third-party affiliate short URL supplied by the source message.
-        affiliate_url = str(api.affiliate_link_for_product(product)).strip()
+        try:
+            affiliate_url = str(api.affiliate_link_for_product(product) or "").strip()
+        except ShopeeAPIError as exc:
+            # A product record without a canonical product URL is not an
+            # accepted affiliate offer. Preserve it as WAITING_VISION rather
+            # than treating it as approved or repeatedly retrying a known
+            # unavailable offer. Other Shopee API errors remain technical
+            # failures so they can be retried safely.
+            if "não possui productLink canônico" in str(exc):
+                raise VisionUnresolvedError(
+                    "Vision encontrou o produto, mas não há link canônico "
+                    "para gerar oferta de afiliado; item preservado em WAITING_VISION"
+                ) from exc
+            raise
+
+        if not affiliate_url.lower().startswith(("https://", "http://")):
+            raise VisionUnresolvedError(
+                "Vision não recebeu URL de afiliado válida; "
+                "item preservado em WAITING_VISION"
+            )
 
         identifier = str(
             product.get("productName")
