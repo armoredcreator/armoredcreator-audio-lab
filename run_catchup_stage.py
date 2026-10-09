@@ -39,6 +39,8 @@ def main() -> int:
     # The stage runner reports one concise item error itself; suppress duplicate
     # pipeline stack/log lines while keeping unrelated critical failures visible.
     logging.getLogger("armored_core.pipeline").setLevel(logging.CRITICAL)
+    logging.getLogger("armored_core.services").setLevel(logging.CRITICAL)
+    logging.getLogger("ArmoredSync.service").setLevel(logging.CRITICAL)
     logging.getLogger("armored_core.catch_up_stages").setLevel(logging.INFO)
 
     coordinator = None
