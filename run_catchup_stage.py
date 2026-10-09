@@ -27,7 +27,7 @@ def main() -> int:
     os.environ.setdefault("ARMORED_REQUIRED_SOURCE_COUNT", "3")
 
     logging.basicConfig(
-        level=os.getenv("ARMORED_LOG_LEVEL", "INFO").upper(),
+        level=os.getenv("ARMORED_LOG_LEVEL", "WARNING").upper(),
         format="%(asctime)s | %(levelname)s | %(message)s",
         force=True,
     )
@@ -60,8 +60,8 @@ def main() -> int:
     except KeyboardInterrupt:
         logging.warning("[CATCH-UP] Interrompido pelo operador; estado durável preservado.")
         return 130
-    except Exception:
-        logging.exception("[CATCH-UP] Etapa encerrada com erro.")
+    except Exception as exc:
+        logging.error("[CATCH-UP] Etapa encerrada: %s", exc)
         return 1
     finally:
         coordinator.close()
