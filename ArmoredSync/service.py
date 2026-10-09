@@ -733,22 +733,6 @@ class TelegramSource:
                     pending_link = None
                     grouped_id = int(grouped_id)
                     if pending_group_id is None:
-                        if pending_video is not None:
-                            pending_id, pending_message = pending_video
-                            original_url = self._shopee_url(pending_message)
-                            if (
-                                pending_id not in self._seen
-                                and original_url is not None
-                                and not self._shopee_url_exists(original_url)
-                            ):
-                                yield (
-                                    pending_id,
-                                    int(topic_id),
-                                    topic_name,
-                                    pending_message,
-                                    original_url,
-                                )
-                            pending_video = None
                         pending_group_id = grouped_id
                         pending_group = [message]
                     elif grouped_id == pending_group_id:
