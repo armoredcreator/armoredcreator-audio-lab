@@ -63,6 +63,7 @@ class VisionMemoizationTests(unittest.TestCase):
         }
         api = Mock()
         api.get_exact_product.return_value = product
+        api.affiliate_link_for_product.return_value = "https://affiliate.shopee.com.br/test"
         vision = ArmoredVision(api=api)
         first = SimpleNamespace(content_id="source_1", original_url="https://shope.ee/abc")
         second = SimpleNamespace(content_id="source_2", original_url="https://shope.ee/abc")
