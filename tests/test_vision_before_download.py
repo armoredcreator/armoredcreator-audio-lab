@@ -175,7 +175,8 @@ class VisionBeforeDownloadTests(unittest.TestCase):
                         coordinator._vision_gate_and_materialize_async(message)
                     )
                 item = db.get("gate-technical")
-                self.assertEqual(item.state, State.RECOVERY)
+                self.assertEqual(item.state, State.VISION)
+                self.assertIn("vision-provider-timeout", db.last_error(item.content_id))
                 self.assertEqual(calls, [])
                 self.assertFalse(item.original_path.exists())
             finally:
@@ -260,11 +261,11 @@ class VisionBeforeDownloadTests(unittest.TestCase):
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
                 item = db.get("gate-rediscover")
-                self.assertEqual(source.reset_calls, 1)
-                self.assertEqual(vision.calls, 2)
-                self.assertEqual(item.state, State.PUBLISHED)
-                self.assertTrue(item.original_path.is_file())
-                self.assertTrue(db.historical_complete())
+                self.assertEqual(source.reset_calls, 0)
+                self.assertEqual(vision.calls, 1)
+                self.assertEqual(item.state, State.VISION)
+                self.assertFalse(item.original_path.is_file())
+                self.assertFalse(db.historical_complete())
             finally:
                 coordinator.close()
 
