@@ -121,12 +121,11 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     item.content_id,
                 )
         # WAITING_VISION is a durable, expected outcome, not a technical failure.
-        waiting = sum(
-            1 for item in coordinator.db.all_items()
-            if item.state == State.WAITING_VISION
-        ) if callable(getattr(coordinator.db, "all_items", None)) else None
-        if waiting is not None:
-            log.info("[CATCH-UP][VISION] Itens WAITING_VISION preservados: %s", waiting)
+        waiting = coordinator.db.conn.execute(
+            "SELECT COUNT(*) FROM items WHERE state=?",
+            (State.WAITING_VISION.value,),
+        ).fetchone()[0]
+        log.info("[CATCH-UP][VISION] Itens WAITING_VISION preservados: %s", waiting)
 
     else:  # stock
         candidates = _ordered(coordinator.db.pending_vision_approved_items(), source)
