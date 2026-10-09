@@ -149,6 +149,44 @@ class VisionBeforeDownloadTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
+    def test_stop_after_vision_is_a_hard_boundary_for_already_approved_rows(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            db = Database(storage.database / "db.sqlite")
+            studio = _Studio(storage)
+            publisher = _Publisher()
+            coordinator = Coordinator(
+                db,
+                storage,
+                _VisionResolved(),
+                studio,
+                publisher,
+                source=None,
+            )
+            try:
+                item_id = db.reserve_item(
+                    "already-approved",
+                    source_id="telegram",
+                    original_url="https://shopee.com.br/product/123",
+                    original_path=storage.original("already-approved"),
+                )
+                db.set_vision(
+                    item_id,
+                    "Produto",
+                    "https://affiliate.invalid/product",
+                    affiliate_urls=("https://affiliate.invalid/product",),
+                )
+
+                coordinator.pipeline.run(item_id, stop_after_vision=True)
+
+                self.assertEqual(db.get(item_id).state, State.RECEIVED)
+                self.assertFalse(db.get(item_id).original_path.exists())
+                self.assertEqual(studio.calls, 0)
+                self.assertEqual(publisher.calls, 0)
+            finally:
+                coordinator.close()
+
     def test_technical_vision_failure_never_downloads(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
