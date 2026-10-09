@@ -144,7 +144,7 @@ class ArmoredVision:
         log.info(
             "[VISION-TIMING] item=%s resolve=%.3fs resolve_cache=%s "
             "product_offer=%.3fs product_cache=%s affiliate_link=%.3fs total=%.3fs",
-            item.content_id,
+            getattr(item, "content_id", "<sem-content-id>"),
             resolution_seconds,
             "hit" if resolution_cache_hit else "miss",
             product_seconds,
