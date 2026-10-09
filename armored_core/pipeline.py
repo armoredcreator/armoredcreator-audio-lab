@@ -42,6 +42,13 @@ class Pipeline:
                 state=item.state.value,
                 approved=True,
             )
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "END",
+                state=item.state.value,
+                stop_after_vision=True,
+            )
             return
         try:
             self.db.record_attempt(item_id)
