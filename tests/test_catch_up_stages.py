@@ -166,6 +166,42 @@ class CatchUpStageTests(unittest.TestCase):
         self.assertEqual(db.items, {})
         self.assertEqual(source.downloads, [])
 
+    def test_sync_stops_at_first_reservation_error(self):
+        messages = [
+            SimpleNamespace(
+                source_id=source_id,
+                telegram_message_id=str(100 + index),
+                topic_id=index,
+                topic_name=f"topic-{source_id}",
+                original_url=f"https://example.invalid/{index}",
+                materialize=lambda _target: self.fail("sync stage must not download"),
+            )
+            for index, source_id in enumerate(SOURCE_IDS, start=1)
+        ]
+        source = FakeSource(messages)
+        db = FakeDB()
+        coordinator = FakeCoordinator(source, db)
+        original_reserve = coordinator.sync.reserve_message
+
+        def fail_second(message):
+            if message.telegram_message_id == "102":
+                raise RuntimeError("sqlite-reservation-failed")
+            return original_reserve(message)
+
+        coordinator.sync.reserve_message = fail_second
+        report = asyncio.run(run_catch_up_stage(coordinator, "sync"))
+
+        self.assertEqual(report["processed"], 1)
+        self.assertEqual(len(report["errors"]), 2)  # write failure + incomplete scan
+        self.assertIn("sqlite-reservation-failed", report["errors"][0])
+        self.assertFalse(report["historical_scan_exhausted"])
+        self.assertEqual(
+            [message.telegram_message_id for message in messages[:2]],
+            ["101", "102"],
+        )
+        self.assertEqual(len(coordinator.sync.reserved), 1)
+        self.assertEqual(source.downloads, [])
+
     def test_sync_only_reserves_all_sources_and_never_downloads_or_runs_pipeline(self):
         messages = [
             SimpleNamespace(
