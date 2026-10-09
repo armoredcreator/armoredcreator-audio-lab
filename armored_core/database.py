@@ -357,6 +357,18 @@ class Database:
         self.conn.commit()
         return item_id
 
+    def update_original_url(self, item_id: str, original_url: str) -> None:
+        """Enrich a durable reservation when a nearby product link is discovered later."""
+        value = str(original_url or "").strip()
+        if not value:
+            return
+        self.conn.execute(
+            "UPDATE items SET original_url=?, updated_at=CURRENT_TIMESTAMP "
+            "WHERE content_id=? AND (original_url IS NULL OR TRIM(original_url)='')",
+            (value, str(item_id)),
+        )
+        self.conn.commit()
+
     def repair_original_path(self, item_id: str, path: Path) -> None:
         """Repair a legacy/incomplete row without changing its pipeline state."""
         self.conn.execute(
