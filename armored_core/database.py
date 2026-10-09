@@ -443,6 +443,37 @@ class Database:
         ).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
 
+    def pending_vision_candidates(self) -> list[Item]:
+        """Return reserved rows whose Vision gate has not produced a decision."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items "
+            "WHERE state IN (?, ?) AND (affiliate_url IS NULL OR TRIM(affiliate_url)='') "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (State.RECEIVED.value, State.VISION.value),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
+    def catch_up_production_items(self) -> list[Item]:
+        """Return durable items that can resume production without re-running Vision."""
+        rows = self.conn.execute(
+            "SELECT content_id FROM items WHERE "
+            "(state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'') "
+            "OR state IN (?, ?, ?, ?) "
+            "OR (state=? AND cleanup_completed=0) "
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id",
+            (
+                State.RECEIVED.value,
+                State.IA.value,
+                State.STUDIO.value,
+                State.PUBLISHING.value,
+                State.RECOVERY.value,
+                State.PUBLISHED.value,
+            ),
+        ).fetchall()
+        return [self.get(str(row["content_id"])) for row in rows]
+
     def last_state_event(self, item_id: str):
         row = self.conn.execute(
             "SELECT old_state, new_state, reason, created_at "
