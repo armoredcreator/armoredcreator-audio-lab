@@ -10,7 +10,7 @@ Execute no PowerShell, a partir da raiz do projeto, com `credentials/project.env
 python .\run_catchup_stage.py sync
 ```
 
-Reserva metadados no SQLite na ordem das fontes configuradas. Não executa Vision nem baixa mídia.
+Reserva metadados no SQLite na ordem das fontes configuradas. Não executa Vision nem baixa mídia. A descoberta percorre todos os tópicos paginados e também aceita histórico geral de grupos/canais sem fórum.
 
 Só avance se o comando terminar com código 0 e o relatório indicar varredura histórica esgotada, sem erros e sem limite de coleta atingido. O estado histórico permanece em CATCH-UP; esta etapa não faz cutover para LIVE.
 
@@ -44,4 +44,4 @@ Após o relatório de Stock, pare. Não execute `START_ALL.bat` nem `run_coordin
 - As etapas são idempotentes em relação às reservas duráveis; uma etapa pode ser repetida após interrupção.
 - Não se marca o histórico como completo nem se avança para LIVE durante Sync, Vision ou Stock.
 - Cada comando encerra após a etapa escolhida. Não há avanço automático entre as três.
-- Use os IDs de fonte e tópicos definidos em `credentials/project.env`; nunca publique esse arquivo ou seus segredos nos logs.
+- Use os IDs de fonte e tópicos definidos em `credentials/project.env`; nunca publique esse arquivo ou seus segredos nos logs. O PowerShell mostra início, erros e um relatório final compacto; o progresso detalhado de download fica desativado por padrão e só aparece se `ARMORED_SYNC_VERBOSE_PROGRESS=1`.
