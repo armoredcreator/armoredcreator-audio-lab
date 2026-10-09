@@ -63,7 +63,6 @@ class Coordinator:
         db = Database(storage.database / "armoredcreator.db")
         runtime_lock_acquired = False
         try:
-lse
             if acquire_runtime_lock:
                 # Acquire before route initialization or any staged database writes.
                 db.acquire_runtime_lock("coordinator")
