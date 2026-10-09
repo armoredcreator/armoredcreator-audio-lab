@@ -1,5 +1,7 @@
 import asyncio
+import os
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -226,6 +228,15 @@ class TelegramDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0][0], 101)
         self.assertEqual(candidates[0][4], product_url)
+
+    def test_historical_limit_parser_is_quiet_and_fails_closed(self):
+        with patch.dict(os.environ, {"ARMORED_SYNC_CATCHUP_LIMIT": "0"}):
+            self.assertIsNone(TelegramSource._read_historical_limit())
+        with patch.dict(os.environ, {"ARMORED_SYNC_CATCHUP_LIMIT": "17"}):
+            self.assertEqual(TelegramSource._read_historical_limit(), 17)
+        with patch.dict(os.environ, {"ARMORED_SYNC_CATCHUP_LIMIT": "invalid"}):
+            with self.assertRaisesRegex(ValueError, "ARMORED_SYNC_CATCHUP_LIMIT"):
+                TelegramSource._read_historical_limit()
 
     def test_topic_discovery_fails_closed_if_forum_pagination_repeats(self):
         repeated_page = [
