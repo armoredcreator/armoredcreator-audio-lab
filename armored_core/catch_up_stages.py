@@ -169,9 +169,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             (State.RECEIVED.value,),
         ).fetchone()[0]
         retryable = coordinator.db.conn.execute(
-            "SELECT COUNT(*) FROM items WHERE state=? "
+            "SELECT COUNT(*) FROM items WHERE state IN (?, ?) "
             "AND (affiliate_url IS NULL OR TRIM(affiliate_url)='')",
-            (State.VISION.value,),
+            (State.RECEIVED.value, State.VISION.value),
         ).fetchone()[0]
         log.debug(
             "[CATCH-UP][VISION] aprovados=%s aguardando=%s retryable=%s",
