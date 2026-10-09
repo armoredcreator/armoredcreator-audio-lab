@@ -160,6 +160,18 @@ def make_item(source_id, message_id, path):
 
 
 class CatchUpStageTests(unittest.TestCase):
+    def test_sync_refuses_finite_historical_limit_before_reserving_anything(self):
+        source = FakeSource()
+        source.historical_collection_limited = True
+        db = FakeDB([])
+        coordinator = FakeCoordinator(source, db)
+
+        with self.assertRaisesRegex(RuntimeError, "ARMORED_SYNC_CATCHUP_LIMIT"):
+            asyncio.run(run_catch_up_stage(coordinator, "sync"))
+
+        self.assertEqual(db.items, {})
+        self.assertEqual(source.downloads, [])
+
     def test_sync_only_reserves_all_sources_and_never_downloads_or_runs_pipeline(self):
         messages = [
             SimpleNamespace(
