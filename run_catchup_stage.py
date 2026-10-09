@@ -43,11 +43,9 @@ def main() -> int:
 
     coordinator = None
     try:
-        coordinator = Coordinator.build(root=root)
-        # Use the same SQLite runtime lease as the production Coordinator.
-        # Never run a staged operation concurrently with another process on this DB.
-        coordinator.db.acquire_runtime_lock("coordinator")
-        coordinator._runtime_lock_held = True
+        # Acquire the SQLite lease inside the composition root, before it
+        # initializes source state or performs any staged database writes.
+        coordinator = Coordinator.build(root=root, acquire_runtime_lock=True)
 
         routes = getattr(coordinator.source, "sources", ())
         if len(routes) != 3:
