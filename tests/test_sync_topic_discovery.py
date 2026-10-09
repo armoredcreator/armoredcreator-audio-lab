@@ -181,6 +181,32 @@ class TelegramDiscoveryTests(unittest.TestCase):
         self.assertEqual(candidates[0][0], 101)
         self.assertEqual(candidates[0][4], product_url)
 
+    def test_topic_discovery_fails_closed_if_forum_pagination_repeats(self):
+        repeated_page = [
+            SimpleNamespace(id=i, title=f"topic-{i}", top_message=i * 10, date=None)
+            for i in range(1, 101)
+        ]
+        client = FakeTelegramClient(topic_pages={0: repeated_page, 100: repeated_page})
+        source = self.make_source(client)
+
+        with self.assertRaisesRegex(RuntimeError, "forum-topic-pagination-stalled"):
+            asyncio.run(source._discover_topics("-100123"))
+
+    def test_topic_history_fails_closed_if_message_pagination_stalls(self):
+        class RepeatingRepliesClient:
+            async def __call__(self, _request):
+                return SimpleNamespace(
+                    messages=[SimpleNamespace(id=10), SimpleNamespace(id=9)]
+                )
+
+        source = self.make_source(RepeatingRepliesClient())
+
+        async def collect():
+            return [message async for message in source._topic_messages("-100123", 500)]
+
+        with self.assertRaisesRegex(RuntimeError, "topic-history-pagination-stalled"):
+            asyncio.run(collect())
+
     def test_general_history_is_streamed_without_loading_media(self):
         messages = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
         client = FakeTelegramClient(messages=messages)
