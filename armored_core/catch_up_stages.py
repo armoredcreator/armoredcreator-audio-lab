@@ -147,6 +147,19 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             if item.original_path.is_file():
                 continue
 
+            # Rows created by earlier lab iterations may contain the old
+            # source-prefixed/product-tail path. Keep any existing immutable
+            # original untouched; repair only missing paths before a new download.
+            canonical_original = coordinator.storage.original(
+                item.content_id,
+                ".mp4",
+                original_url=item.original_url,
+                source_id=item.source_id,
+            )
+            if item.original_path != canonical_original:
+                coordinator.db.repair_original_path(item.content_id, canonical_original)
+                item = coordinator.db.get(item.content_id)
+
             async def materialize(
                 target,
                 source_id=item.source_id,
