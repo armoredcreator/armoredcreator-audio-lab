@@ -50,9 +50,9 @@ def main() -> int:
                 "Esperadas exatamente 3 fontes Telegram configuradas; "
                 f"encontradas {len(routes)}."
             )
-        logging.info(
-            "[CATCH-UP] Etapa solicitada: %s. Ferramentas posteriores ficarão paradas.",
-            args.stage.upper(),
+        print(
+            f"[CATCH-UP] INÍCIO etapa={args.stage.upper()} | "
+            "log detalhado desativado; relatório final e erros serão exibidos"
         )
         report = asyncio.run(run_catch_up_stage(coordinator, args.stage))
         print(json.dumps(report, ensure_ascii=False, indent=2))
