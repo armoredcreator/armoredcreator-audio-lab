@@ -60,6 +60,12 @@ class Coordinator:
         if project_config.exists():
             load_dotenv(project_config, override=False)
 
+        # The staged historical runner is exclusively a real Telegram
+        # operation; never silently fall back to LocalSource because of an
+        # inherited shell variable or a stale project.env setting.
+        if staged:
+            os.environ["ARMORED_REAL_TELEGRAM"] = "1"
+
         db = Database(storage.database / "armoredcreator.db")
         runtime_lock_acquired = False
         try:
