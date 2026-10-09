@@ -5,11 +5,16 @@ from pathlib import Path
 from .models import Item, State
 
 class Database:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, initialize: bool = True) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        if initialize:
+            self._init()
+
+    def initialize(self) -> None:
+        """Initialize/migrate the schema after a staged runtime lease is held."""
         self._init()
 
     def _init(self) -> None:
