@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import Counter
 from typing import Any
 
@@ -156,7 +157,12 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 "catch-up-recovered-vision-evidence",
             )
         candidates = _ordered(coordinator.db.pending_vision_candidates(), source)
+        vision_started = time.perf_counter()
+        last_progress_at = vision_started
+        total_candidates = len(candidates)
+        print(f"[CATCH-UP][VISION] candidatos_pendentes={total_candidates}; processamento sequencial")
         for item in candidates:
+            item_started = time.perf_counter()
             try:
                 coordinator.pipeline.run(item.content_id, stop_after_vision=True)
                 current = coordinator.db.get(item.content_id)
@@ -178,6 +184,19 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 # Keep strict source/message ordering: retry this candidate
                 # before allowing a later candidate to overtake it.
                 break
+            now = time.perf_counter()
+            if processed_count % 25 == 0 or now - last_progress_at >= 30:
+                elapsed = max(now - vision_started, 0.001)
+                rate = processed_count / elapsed * 60
+                remaining = max(total_candidates - processed_count, 0)
+                eta_minutes = remaining / max(processed_count / elapsed, 0.001) / 60
+                print(
+                    f"[CATCH-UP][VISION] progresso={processed_count}/{total_candidates} "
+                    f"aprovados={approved_this_stage} waiting={waiting_this_stage} "
+                    f"ultimo_item={now - item_started:.2f}s ritmo={rate:.1f}/min "
+                    f"decorrido={elapsed / 60:.1f}min ETA_aprox={eta_minutes:.1f}min"
+                )
+                last_progress_at = now
         # WAITING_VISION is a durable, expected outcome, not a technical failure.
         waiting = coordinator.db.conn.execute(
             "SELECT COUNT(*) FROM items WHERE state=?",
