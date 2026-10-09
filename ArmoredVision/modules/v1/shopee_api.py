@@ -27,11 +27,14 @@ query ProductOffer($itemId: Int64, $shopId: Int64, $page: Int, $limit: Int) {
 
 
 class ShopeeAffiliateAPI:
-    def __init__(self, app_id: Optional[str] = None, secret_key: Optional[str] = None):
+    def __init__(self, app_id: Optional[str] = None, secret_key: Optional[str] = None, session=None):
         self.app_id = app_id or os.getenv("SHOPEE_APP_ID")
         self.secret_key = secret_key or os.getenv("SHOPEE_SECRET_KEY")
         if not self.app_id or not self.secret_key:
             raise RuntimeError("SHOPEE_APP_ID/SHOPEE_SECRET_KEY não configurados")
+        # Keep-alive connection pool reused across the sequential catch-up items.
+        # A caller may inject a session for tests; no parallel item processing is added.
+        self._session = session if session is not None else requests.Session()
 
     def _post(self, query: str, variables: dict[str, Any] | None = None):
         body = {"query": query, "variables": variables or {}}
@@ -47,7 +50,7 @@ class ShopeeAffiliateAPI:
                 f"{self.app_id}{ts}{payload}{self.secret_key}".encode()
             ).hexdigest()
             try:
-                response = requests.post(
+                response = self._session.post(
                     os.getenv(
                         "SHOPEE_AFFILIATE_API_URL",
                         "https://open-api.affiliate.shopee.com.br/graphql",
@@ -63,9 +66,6 @@ class ShopeeAffiliateAPI:
                 )
                 response.raise_for_status()
                 data = response.json()
-                # GraphQL errors are usually validation, permission, or request
-                # errors. Retrying them blindly wastes time and can hide a bad
-                # configuration. Only transport/HTTP transient failures retry.
                 if data.get("errors"):
                     raise ShopeeAPIError(f"Erro GraphQL Shopee: {data['errors']}")
                 return data
