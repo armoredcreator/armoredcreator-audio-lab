@@ -66,19 +66,9 @@ class Storage:
                 os.getenv(f"ARMORED_SOURCE_{index}_CHAT_ID"),
                 os.getenv(f"ARMORED_SOURCE_{index}_KEY"),
             )
-            configured_values = tuple(str(item or "").strip() for item in configured_values)
-            if any(configured and value.startswith(f"{configured}_") for configured in configured_values):
-                return next(
-                    configured
-                    for configured in configured_values
-                    if configured and value.startswith(f"{configured}_")
-                )
-            if index > 1 and not any(configured_values) and not any(
-                os.getenv(f"ARMORED_SOURCE_{later}_{field}")
-                for later in range(index + 1, 100)
-                for field in ("ID", "CHAT_ID", "KEY")
-            ):
-                break
+            for configured in (str(item or "").strip() for item in configured_values):
+                if configured and value.startswith(f"{configured}_"):
+                    return configured
         return None
 
     def _telegram_message_id(
