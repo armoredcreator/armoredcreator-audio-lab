@@ -87,11 +87,11 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     processed.append(item_id)
                 except Exception as exc:
                     errors.append(f"sync:{source_id}:{message_id}:{exc}")
-                    log.exception(
-                        "[CATCH-UP][SYNC] Falha ao reservar source=%s message=%s; "
-                        "nenhum download foi iniciado",
+                    log.error(
+                        "[CATCH-UP][SYNC] Falha source=%s mensagem=%s: %s",
                         source_id,
                         message_id,
+                        exc,
                     )
         finally:
             await coordinator._release_source_connection()
@@ -107,6 +107,15 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             errors.append("sync:limite de coleta configurado; histórico não pode ser declarado completo")
 
     elif stage == "vision":
+        # Recover the narrow crash window after Vision evidence is committed
+        # but before Pipeline transitions VISION -> RECEIVED.
+        interrupted_approved = coordinator.db.vision_approved_interrupted_items()
+        for item in _ordered(interrupted_approved, source):
+            coordinator.db.transition(
+                item.content_id,
+                State.RECEIVED,
+                "catch-up-recovered-vision-evidence",
+            )
         candidates = _ordered(coordinator.db.pending_vision_candidates(), source)
         for item in candidates:
             try:
@@ -118,9 +127,10 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                     errors.append(f"vision:{item.content_id}:falha técnica em RECOVERY")
             except Exception as exc:
                 errors.append(f"vision:{item.content_id}:{exc}")
-                log.exception(
-                    "[CATCH-UP][VISION] Falha em %s; nenhum download foi iniciado",
+                log.error(
+                    "[CATCH-UP][VISION] Falha item=%s: %s",
                     item.content_id,
+                    exc,
                 )
         # WAITING_VISION is a durable, expected outcome, not a technical failure.
         waiting = coordinator.db.conn.execute(
@@ -173,9 +183,10 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                 marker = getattr(source, "mark_materialization_failed", None)
                 if callable(marker):
                     marker()
-                log.exception(
-                    "[CATCH-UP][STOCK] Falha ao baixar %s; produção continua bloqueada",
+                log.error(
+                    "[CATCH-UP][STOCK] Falha item=%s: %s",
                     item.content_id,
+                    exc,
                 )
 
     report = {
