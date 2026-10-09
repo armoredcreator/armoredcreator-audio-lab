@@ -10,43 +10,57 @@ from ArmoredVision.service import ArmoredVision
 
 class ShopeeRetryPolicyTests(unittest.TestCase):
     def make_api(self):
-        api = ShopeeAffiliateAPI.__new__(ShopeeAffiliateAPI)
-        api.app_id = "test-app"
-        api.secret_key = "test-secret"
-        return api
+        session = Mock()
+        api = ShopeeAffiliateAPI(
+            app_id="test-app", secret_key="test-secret", session=session
+        )
+        return api, session
 
-    @patch("ArmoredVision.modules.v1.shopee_api.requests.post")
-    def test_graphql_error_is_not_retried(self, post):
+    def test_graphql_error_is_not_retried(self):
+        api, session = self.make_api()
         response = Mock()
         response.raise_for_status.return_value = None
         response.json.return_value = {"errors": [{"message": "invalid query"}]}
-        post.return_value = response
+        session.post.return_value = response
 
         with patch.dict("os.environ", {"SHOPEE_API_MAX_RETRIES": "3"}):
             with patch("ArmoredVision.modules.v1.shopee_api.time.sleep") as sleep:
                 with self.assertRaisesRegex(ShopeeAPIError, "Erro GraphQL"):
-                    self.make_api()._post("query { test }")
+                    api._post("query { test }")
 
-        self.assertEqual(post.call_count, 1)
+        self.assertEqual(session.post.call_count, 1)
         sleep.assert_not_called()
 
-    @patch("ArmoredVision.modules.v1.shopee_api.requests.post")
-    def test_server_error_is_retried_and_then_succeeds(self, post):
+    def test_server_error_is_retried_and_then_succeeds(self):
+        api, session = self.make_api()
         failed = requests.Response()
         failed.status_code = 503
         failed.url = "https://example.invalid/graphql"
         success = Mock()
         success.raise_for_status.return_value = None
         success.json.return_value = {"data": {"ok": True}}
-        post.side_effect = [requests.HTTPError("503", response=failed), success]
+        session.post.side_effect = [requests.HTTPError("503", response=failed), success]
 
         with patch.dict("os.environ", {"SHOPEE_API_MAX_RETRIES": "2"}):
             with patch("ArmoredVision.modules.v1.shopee_api.time.sleep") as sleep:
-                result = self.make_api()._post("query { test }")
+                result = api._post("query { test }")
 
         self.assertEqual(result, {"data": {"ok": True}})
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(session.post.call_count, 2)
         sleep.assert_called_once()
+
+    def test_same_session_is_reused_for_multiple_requests(self):
+        api, session = self.make_api()
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"data": {"ok": True}}
+        session.post.return_value = response
+
+        api._post("query { first }")
+        api._post("query { second }")
+
+        self.assertEqual(session.post.call_count, 2)
+        self.assertIs(api._session, session)
 
 
 class VisionMemoizationTests(unittest.TestCase):
