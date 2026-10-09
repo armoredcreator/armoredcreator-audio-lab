@@ -55,7 +55,9 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
             f"foram encontradas {len(source_list)}."
         )
 
-    per_source: Counter[str] = Counter()
+    per_source: Counter[str] = Counter(
+        {str(candidate.source_id): 0 for candidate in source_list}
+    )
     errors: list[str] = []
     processed: list[str] = []
 
