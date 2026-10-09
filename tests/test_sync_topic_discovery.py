@@ -132,6 +132,55 @@ class TelegramDiscoveryTests(unittest.TestCase):
         self.assertEqual(candidates[0][0], 101)
         self.assertEqual(candidates[0][4], product_url)
 
+    def test_video_sent_as_generic_document_is_still_a_candidate(self):
+        product_url = "https://shopee.com.br/product/14"
+        messages = [
+            SimpleNamespace(
+                id=101,
+                video=None,
+                document=SimpleNamespace(mime_type="video/mp4", attributes=[]),
+                message="",
+                entities=[],
+                grouped_id=None,
+            ),
+            SimpleNamespace(
+                id=102,
+                video=None,
+                document=None,
+                message=product_url,
+                entities=[],
+                grouped_id=None,
+            ),
+        ]
+
+        class CandidateSource(TelegramSource):
+            async def _topic_messages(self, _source, _topic_id):
+                for message in messages:
+                    yield message
+
+        source = CandidateSource(
+            Path("."),
+            SimpleNamespace(),
+            db=None,
+            source="-100123",
+            source_id="-100123",
+        )
+
+        async def collect():
+            return [
+                candidate
+                async for candidate in source._candidate_iterator(
+                    -100123,
+                    [(500, "topic")],
+                )
+            ]
+
+        candidates = asyncio.run(collect())
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0][0], 101)
+        self.assertEqual(candidates[0][4], product_url)
+
     def test_general_history_is_streamed_without_loading_media(self):
         messages = [SimpleNamespace(id=1), SimpleNamespace(id=2)]
         client = FakeTelegramClient(messages=messages)
