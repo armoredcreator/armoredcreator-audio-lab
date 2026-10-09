@@ -9,13 +9,20 @@ from ArmoredSync.service import TelegramSource
 
 
 class FakeTelegramClient:
-    def __init__(self, topic_pages=None, messages=()):
+    def __init__(self, topic_pages=None, messages=(), forum=True, discovery_error=None):
         self.topic_pages = topic_pages or {}
         self.messages = list(messages)
+        self.forum = forum
+        self.discovery_error = discovery_error
         self.requests = []
         self.iter_messages_args = None
 
+    async def get_entity(self, _source):
+        return SimpleNamespace(forum=self.forum)
+
     async def __call__(self, request):
+        if self.discovery_error is not None:
+            raise self.discovery_error
         self.requests.append(request)
         offset_topic = int(getattr(request, "offset_topic", 0) or 0)
         return SimpleNamespace(topics=self.topic_pages.get(offset_topic, []))
@@ -37,12 +44,29 @@ class TelegramDiscoveryTests(unittest.TestCase):
         )
 
     def test_regular_chat_falls_back_to_general_history(self):
-        client = FakeTelegramClient(topic_pages={0: []})
+        client = FakeTelegramClient(topic_pages={0: []}, forum=False)
         source = self.make_source(client)
 
         topics = asyncio.run(source._discover_topics("-100123"))
 
         self.assertEqual(topics, [(0, "Geral")])
+        self.assertEqual(client.requests, [])
+
+    def test_forum_topic_discovery_does_not_fallback_on_api_failure(self):
+        client = FakeTelegramClient(
+            discovery_error=TimeoutError("Telegram request timed out")
+        )
+        source = self.make_source(client)
+
+        with self.assertRaisesRegex(RuntimeError, "forum-topic-discovery-failed"):
+            asyncio.run(source._discover_topics("-100123"))
+
+    def test_empty_forum_topic_list_fails_closed(self):
+        client = FakeTelegramClient(topic_pages={0: []}, forum=True)
+        source = self.make_source(client)
+
+        with self.assertRaisesRegex(RuntimeError, "forum-topic-list-empty"):
+            asyncio.run(source._discover_topics("-100123"))
 
     def test_forum_topic_discovery_paginates_past_first_100(self):
         first_page = [
